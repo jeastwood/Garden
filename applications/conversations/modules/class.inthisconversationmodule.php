@@ -9,23 +9,12 @@ Contact Vanilla Forums Inc. at support [at] vanillaforums [dot] com
 */
 
 /**
- * Garden.Modules
- */
-
-/**
  * Renders a list of people in the specified conversation.
  */
-class InThisConversationModule extends Module {
+class InThisConversationModule extends Gdn_Module {
 
-   protected $_UserData;
-   
-   public function __construct(&$Sender = '') {
-      $this->_UserData = FALSE;
-      parent::__construct($Sender);
-   }
-   
    public function SetData($Data) {
-      $this->_UserData = $Data;
+      $this->Data = $Data;
    }
 
    public function AssetTarget() {
@@ -33,7 +22,7 @@ class InThisConversationModule extends Module {
    }
 
    public function ToString() {
-      if ($this->_UserData !== FALSE && $this->_UserData->NumRows() > 0)
+      if (is_object($this->Data) && $this->Data->NumRows() > 0)
          return parent::ToString();
 
       return '';

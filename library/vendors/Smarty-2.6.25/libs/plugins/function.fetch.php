@@ -35,7 +35,7 @@ function smarty_function_fetch($params, &$smarty)
             $smarty->_trigger_fatal_error('[plugin] (secure mode) fetch \'' . $params['file'] . '\' is not allowed');
             return;
         }
-        
+
         // fetch the file
         if($fp = @fopen($params['file'],'r')) {
             while(!feof($fp)) {
@@ -181,7 +181,7 @@ function smarty_function_fetch($params, &$smarty)
                         $content .= fgets($fp,4096);
                     }
                     fclose($fp);
-                    $csplit = split("\r\n\r\n",$content,2);
+                    $csplit = explode("\r\n\r\n",$content,2);
 
                     $content = $csplit[1];
 

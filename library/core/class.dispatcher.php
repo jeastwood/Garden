@@ -24,7 +24,7 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
    /**
     * An array of folders within the application that are OK to search through
     * for controllers. This property is filled by the applications array
-    * located in /conf/applications.php and included in /garden/bootstrap.php
+    * located in /conf/applications.php and included in /bootstrap.php
     *
     * @var array
     */
@@ -33,7 +33,7 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
    /**
     * An associative array of ApplicationName => ApplicationFolder. This
     * property is filled by the applications array located in
-    * /conf/applications.php and included in /garden/bootstrap.php
+    * /conf/applications.php and included in /bootstrap.php
     *
     * @var array
     */
@@ -45,14 +45,6 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
     * @var string
     */
    public $Request;
-
-   /**
-    * An array of routes and where they should be redirected to (assigned in
-    * the main bootstrap).
-    *
-    * @var array
-    */
-   public $Routes;
 
    /**
     * The name of the application folder that contains the controller that has
@@ -100,6 +92,17 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
    private $_ControllerMethodArgs = array();
 
    /**
+    * @var string|FALSE The delivery method to set on the controller.
+    */
+   private $_DeliveryMethod = FALSE;
+
+
+   /**
+    * @var string|FALSE The delivery type to set on the controller.
+    */
+   private $_DeliveryType = FALSE;
+
+   /**
     * An associative collection of variables that will get passed into the
     * controller as properties once it has been instantiated.
     *
@@ -114,14 +117,18 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
     * @var string
     */
    private $_SyndicationMethod;
+   
+   const BLOCK_NEVER = 0;
+   const BLOCK_PERMISSION = 1;
+   const BLOCK_ANY = 2;
 
    /**
     * Class constructor.
     */
    public function __construct() {
+      parent::__construct();
       $this->_EnabledApplicationFolders = array();
       $this->Request = '';
-      $this->Routes = array();
       $this->_ApplicationFolder = '';
       $this->_AssetCollection = array();
       $this->_ControllerFolder = '';
@@ -129,7 +136,16 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
       $this->_ControllerMethod = '';
       $this->_ControllerMethodArgs = array();
       $this->_PropertyCollection = array();
+      $this->_Data = array();
    }
+   
+   public function Cleanup() {
+      // Destruct the db connection;
+      $Database = Gdn::Database();
+      if($Database != null)
+         $Database->CloseConnection();
+   }
+
 
    /**
     * Return the properly formatted controller class name.
@@ -137,23 +153,93 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
    public function ControllerName() {
       return $this->_ControllerName.'Controller';
    }
+   
+   public function Application() {
+      return $this->_ApplicationFolder;
+   }
+   
+   public function Controller() {
+      return $this->_ControllerName;
+   }
+   
+   public function ControllerMethod() {
+      return $this->_ControllerMethod;
+   }
+   
+   public function ControllerArguments() {
+      return $this->_ControllerMethodArgs;
+   }
 
    /**
-    * Analyzes the supplied query string and decides how to dispatch the
-    * request.
+    * Analyzes the supplied query string and decides how to dispatch the request.
     */
-   public function Dispatch() {
-      $this->_AnalyzeRequest();
-
-      //echo '<br />App folder: '.$this->_ApplicationFolder;
-      //echo '<br />Controller folder: '.$this->_ControllerFolder;
-      //echo '<br />ControllerName: '.$this->_ControllerName;
-      //echo '<br />ControllerMethod: '.$this->_ControllerMethod;
-
+   public function Dispatch($ImportRequest = NULL, $Permanent = TRUE) {
+      
+      if ($ImportRequest && is_string($ImportRequest))
+         $ImportRequest = Gdn_Request::Create()->FromEnvironment()->WithURI($ImportRequest);
+      
+      if (is_a($ImportRequest, 'Gdn_Request') && $Permanent) {
+         Gdn::Request($ImportRequest);
+      }
+      
+      $Request = is_a($ImportRequest, 'Gdn_Request') ? $ImportRequest : Gdn::Request();
+      
+      // Move this up to allow pre-routing
+      $this->FireEvent('BeforeDispatch');
+      $this->AnalyzeRequest($Request);
+      
+      // By default, all requests can be blocked by UpdateMode/PrivateCommunity
+      $CanBlock = self::BLOCK_ANY;
+      
+      try {
+         $BlockExceptions = array(
+             '/utility(\/.*)?$/'                   => self::BLOCK_NEVER,
+             '/plugin(\/.*)?$/'                    => self::BLOCK_NEVER,
+             '/entry(\/.*)?$/'                     => self::BLOCK_PERMISSION,
+             '/user\/usernameavailable(\/.*)?$/'   => self::BLOCK_PERMISSION,
+             '/user\/emailavailable(\/.*)?$/'      => self::BLOCK_PERMISSION,
+             '/home\/termsofservice(\/.*)?$/'      => self::BLOCK_PERMISSION
+         );
+         
+         $this->EventArguments['BlockExceptions'] = &$BlockExceptions;
+         $this->FireEvent('BeforeBlockDetect');
+         
+         $PathRequest = Gdn::Request()->Path();
+         foreach ($BlockExceptions as $BlockException => $BlockLevel)
+            if (preg_match($BlockException, $PathRequest))
+               throw new Exception("Block detected", $BlockLevel);
+         
+         // Never block an admin
+         if (Gdn::Session()->CheckPermission('Garden.Settings.Manage'))
+            throw new Exception("Block detected", self::BLOCK_NEVER);
+         
+         if (Gdn::Session()->IsValid())
+            throw new Exception("Block detected", self::BLOCK_PERMISSION);
+         
+      } catch (Exception $e) {
+         // BlockLevel
+         //  TRUE = Block any time
+         //  FALSE = Absolutely no blocking
+         //  NULL = Block for permissions (e.g. PrivateCommunity)
+         $CanBlock = $e->getCode();
+      }
+   
+      // If we're in updatemode and arent explicitly prevented from blocking, block
+      if (Gdn::Config('Garden.UpdateMode', FALSE) && $CanBlock > self::BLOCK_NEVER)
+         $Request->WithURI(Gdn::Router()->GetDestination('UpdateMode'));
+      
+      // If we're in updatemode and can block, redirect to signin
+      if (C('Garden.PrivateCommunity') && $CanBlock > self::BLOCK_PERMISSION) {
+         Redirect('/entry/signin?Target='.urlencode($this->Request));
+         exit();
+      }
+      
       $ControllerName = $this->ControllerName();
       if ($ControllerName != '' && class_exists($ControllerName)) {
          // Create it and call the appropriate method/action
          $Controller = new $ControllerName();
+         
+         $this->EventArguments['Controller'] =& $Controller;
 
          // Pass along any assets
          if (is_array($this->_AssetCollection)) {
@@ -174,89 +260,97 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
          $Controller->SelfUrl = $this->Request;
 
          // Pass along any objects
-         foreach($this->_PropertyCollection as $Name => $Mixed) {
+         foreach ($this->_PropertyCollection as $Name => $Mixed) {
             $Controller->$Name = $Mixed;
          }
 
-         // Pass in the routes
-         $Controller->Routes = $this->Routes;
+         // Pass along any data.
+         if (is_array($this->_Data))
+            $Controller->Data = $this->_Data;
 
          // Set up a default controller method in case one isn't defined.
          $ControllerMethod = str_replace('_', '', $this->_ControllerMethod);
          $Controller->OriginalRequestMethod = $ControllerMethod;
+
+         $this->FireEvent('AfterAnalyzeRequest');
+
          // Take enabled plugins into account, as well
-         $PluginManager = Gdn::Factory('PluginManager');
-         $PluginManagerHasReplacementMethod = $PluginManager->HasNewMethod($this->ControllerName(), $this->_ControllerMethod);
-         if (!$PluginManagerHasReplacementMethod && ($this->_ControllerMethod == '' || !method_exists($Controller, $ControllerMethod))) {
+         $PluginReplacement = Gdn::PluginManager()->HasNewMethod($this->ControllerName(), $this->_ControllerMethod);
+         if (!$PluginReplacement && ($this->_ControllerMethod == '' || !method_exists($Controller, $ControllerMethod))) {
             // Check to see if there is an 'x' version of the method.
-            if(method_exists($Controller, 'x'.$ControllerMethod)) {
-               $PluginManagerHasReplacementMethod = TRUE;
+            if (method_exists($Controller, 'x' . $ControllerMethod)) {
+               // $PluginManagerHasReplacementMethod = TRUE;
+               $ControllerMethod = 'x' . $ControllerMethod;
             } else {
                if ($this->_ControllerMethod != '')
                   array_unshift($this->_ControllerMethodArgs, $this->_ControllerMethod);
-               
+
                $this->_ControllerMethod = 'Index';
                $ControllerMethod = 'Index';
-               
-               $PluginManagerHasReplacementMethod = $PluginManager->HasNewMethod($this->ControllerName(), $this->_ControllerMethod);
+
+               $PluginReplacement = Gdn::PluginManager()->HasNewMethod($this->ControllerName(), $this->_ControllerMethod);
             }
          }
+
          // Pass in the querystring values
          $Controller->ApplicationFolder = $this->_ApplicationFolder;
          $Controller->Application = $this->EnabledApplication();
          $Controller->ControllerFolder = $this->_ControllerFolder;
          $Controller->RequestMethod = $this->_ControllerMethod;
          $Controller->RequestArgs = $this->_ControllerMethodArgs;
+         $Controller->Request = $Request;
+         $Controller->DeliveryType($Request->GetValue('DeliveryType', $this->_DeliveryType));
+         $Controller->DeliveryMethod($Request->GetValue('DeliveryMethod', $this->_DeliveryMethod));
 
+         // Set special controller method options for REST APIs.
+         Gdn::Controller($Controller);
          $Controller->Initialize();
+         
+         $this->EventArguments['Controller'] = &$Controller;
+         $this->FireEvent('AfterControllerCreate');
 
          // Call the requested method on the controller - error out if not defined.
-         if ($PluginManagerHasReplacementMethod || method_exists($Controller, $ControllerMethod)) {
-            // call_user_func_array is too slow!!
-            //call_user_func_array(array($Controller, $ControllerMethod), $this->_ControllerMethodArgs);
+         if ($PluginReplacement) {
+            // Set the application folder to the plugin's key.
+//            $PluginInfo = Gdn::PluginManager()->GetPluginInfo($PluginReplacement, Gdn_PluginManager::ACCESS_CLASSNAME);
+//            if ($PluginInfo) {
+//               $Controller->ApplicationFolder = 'plugins/'.GetValue('Index', $PluginInfo);
+//            }
             
-            if ($PluginManagerHasReplacementMethod) {
-              $PluginManager->CallNewMethod($Controller, $Controller->ControllerName, $ControllerMethod);
-            } else {
-              
-              $Args = $this->_ControllerMethodArgs;
-              $Count = count($Args);
-              
-              if ($Count == 0) {
-                 $Controller->$ControllerMethod();
-              } else if ($Count == 1) {
-                 $Controller->$ControllerMethod($Args[0]);
-              } else if ($Count == 2) {
-                 $Controller->$ControllerMethod($Args[0], $Args[1]);
-              } else if ($Count == 3) {
-                 $Controller->$ControllerMethod($Args[0], $Args[1], $Args[2]);
-              } else if ($Count == 4) {
-                 $Controller->$ControllerMethod($Args[0], $Args[1], $Args[2], $Args[3]);
-              } else if ($Count == 5) {
-                 $Controller->$ControllerMethod($Args[0], $Args[1], $Args[2], $Args[3], $Args[4]);
-              } else if ($Count == 6) {
-                 $Controller->$ControllerMethod($Args[0], $Args[1], $Args[2], $Args[3], $Args[4], $Args[5]);
-              } else if ($Count == 7) {
-                 $Controller->$ControllerMethod($Args[0], $Args[1], $Args[2], $Args[3], $Args[4], $Args[5], $Args[6]);
-              } else if ($Count == 8) {
-                 $Controller->$ControllerMethod($Args[0], $Args[1], $Args[2], $Args[3], $Args[4], $Args[5], $Args[6], $Args[7]);
-              } else if ($Count == 9) {
-                 $Controller->$ControllerMethod($Args[0], $Args[1], $Args[2], $Args[3], $Args[4], $Args[5], $Args[6], $Args[7], $Args[8]);
-              } else {
-                 $Controller->$ControllerMethod($Args[0], $Args[1], $Args[2], $Args[3], $Args[4], $Args[5], $Args[6], $Args[7], $Args[8], $Args[9]);
-              }
+            // Reflect the args for the method.
+            $Callback = Gdn::PluginManager()->GetCallback($Controller->ControllerName, $ControllerMethod);
+            // Augment the arguments to the plugin with the sender and these arguments.
+            $InputArgs = array_merge(array($Controller), $this->_ControllerMethodArgs, array('Sender' => $Controller, 'Args' => $this->_ControllerMethodArgs));
+//            decho(array_keys($InputArgs), 'InputArgs');
+            $Args = ReflectArgs($Callback, $InputArgs, $Request->Get());
+//            array_shift($Args);
+//            decho($Args, 'Args');
+//            die();
+            
+            $this->FireEvent('BeforeControllerMethod');
+            try {
+               call_user_func_array($Callback, $Args);
+            } catch (Exception $Ex) {
+               $Controller->RenderException($Ex);
+            }
+         } elseif (method_exists($Controller, $ControllerMethod)) {
+            $Args = ReflectArgs(array($Controller, $ControllerMethod), $this->_ControllerMethodArgs, $Request->Get());
+            $this->_ControllerMethodArgs = $Args;
+            
+            $this->FireEvent('BeforeControllerMethod');
+            try {
+               call_user_func_array(array($Controller, $ControllerMethod), $Args);
+            } catch (Exception $Ex) {
+               $Controller->RenderException($Ex);
+               exit();
             }
          } else {
-            trigger_error(ErrorMessage('Controller method missing: '.$this->_ControllerName.'.'.$ControllerMethod.'();', 'Dispatcher', 'Dispatch'), E_USER_ERROR);
+            Gdn::Request()->WithRoute('Default404');
+            return $this->Dispatch();
          }
       }
-
-      // Destruct the db connection;
-      $Database = Gdn::Database();
-      if($Database != null)
-         $Database->CloseConnection();
    }
-
+   
    /**
     * Undocumented method.
     *
@@ -280,11 +374,15 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
       if ($ApplicationFolder == '')
          $ApplicationFolder = $this->_ApplicationFolder;
 
-      $EnabledApplication = array_keys($this->_EnabledApplications, $ApplicationFolder);
-      $EnabledApplication = count($EnabledApplication) > 0 ? $EnabledApplication[0] : '';
-      $this->EventArguments['EnabledApplication'] = $EnabledApplication;
-      $this->FireEvent('AfterEnabledApplication');
-      return $EnabledApplication;
+      foreach (Gdn::ApplicationManager()->AvailableApplications() as $ApplicationName => $ApplicationInfo) {
+         if (GetValue('Folder', $ApplicationInfo, FALSE) === $ApplicationFolder) {
+            $EnabledApplication = $ApplicationName;
+            $this->EventArguments['EnabledApplication'] = $EnabledApplication;
+            $this->FireEvent('AfterEnabledApplication');
+            return $EnabledApplication;
+         }
+      }
+      return FALSE;
    }
 
    /**
@@ -297,6 +395,12 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
     */
    public function PassAsset($AssetName, $Asset) {
       $this->_AssetCollection[$AssetName][] = $Asset;
+      return $this;
+   }
+
+   public function PassData($Name, $Value) {
+      $this->_Data[$Name] = $Value;
+      return $this;
    }
 
    /**
@@ -307,6 +411,7 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
     */
    public function PassProperty($Name, $Mixed) {
       $this->_PropertyCollection[$Name] = $Mixed;
+      return $this;
    }
 
    /**
@@ -314,15 +419,13 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
     * anything useful into this object's Controller properties.
     *
     * @param int $FolderDepth
-    * @todo $folderDepth needs a description.
     */
-   protected function _AnalyzeRequest($FolderDepth = 2) {
+   protected function AnalyzeRequest(&$Request) {
+   
+      // Here is the basic format of a request:
+      // [/application]/controller[/method[.json|.xml]]/argn|argn=valn
+
       // Here are some examples of what this method could/would receive:
-      // /application/controllergroup/controller/method/argn
-      // /controllergroup/controller/method/argn
-      // /application/controllergroup/controller/argn
-      // /controllergroup/controller/argn
-      // /controllergroup/controller
       // /application/controller/method/argn
       // /controller/method/argn
       // /application/controller/argn
@@ -335,162 +438,173 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
       $this->_ControllerName = '';
       $this->_ControllerMethod = 'index';
       $this->_ControllerMethodArgs = array();
+      $this->Request = $Request->Path(FALSE);
 
-      // Retrieve and parse the request
-      if ($this->Request == '') {
-         $this->Request = Gdn_Url::Request();
-         $Prefix = strtolower(substr($this->Request, 0, strpos($this->Request, '/')));
-         switch ($Prefix) {
-            case 'rss':
-               $this->_SyndicationMethod = SYNDICATION_RSS;
-               $this->Request = substr($this->Request, 4);
+      $PathAndQuery = $Request->PathAndQuery();
+      $MatchRoute = Gdn::Router()->MatchRoute($PathAndQuery);
+      
+      // We have a route. Take action.
+      if ($MatchRoute !== FALSE) {
+         switch ($MatchRoute['Type']) {
+            case 'Internal':
+               $Request->PathAndQuery($MatchRoute['FinalDestination']);
+               $this->Request = $Request->Path(FALSE);
                break;
-            case 'atom':
-               $this->_SyndicationMethod = SYNDICATION_ATOM;
-               $this->Request = substr($this->Request, 5);
+
+            case 'Temporary':
+               header("HTTP/1.1 302 Moved Temporarily" );
+               header("Location: ".Url($MatchRoute['FinalDestination']));
+               exit();
+               break;
+
+            case 'Permanent':
+               header("HTTP/1.1 301 Moved Permanently" );
+               header("Location: ".Url($MatchRoute['FinalDestination']));
+               exit();
+               break;
+
+            case 'NotAuthorized':
+               header("HTTP/1.1 401 Not Authorized" );
+               $this->Request = $MatchRoute['FinalDestination'];
+               break;
+
+            case 'NotFound':
+               header("HTTP/1.1 404 Not Found" );
+               $this->Request = $MatchRoute['FinalDestination'];
+               break;
+         }
+      }
+      
+      switch ($Request->OutputFormat()) {
+         case 'rss':
+            $this->_SyndicationMethod = SYNDICATION_RSS;
+            break;
+         case 'atom':
+            $this->_SyndicationMethod = SYNDICATION_ATOM;
+            break;
+         case 'default':
+         default:
+            $this->_SyndicationMethod = SYNDICATION_NONE;
+            break;
+      }
+
+      if ($this->Request == '') {
+         $DefaultController = Gdn::Router()->GetRoute('DefaultController');
+         $this->Request = $DefaultController['Destination'];
+      }
+
+      $Parts = explode('/', str_replace('\\', '/', $this->Request));
+
+      /**
+       * The application folder is either the first argument or is not provided. The controller is therefore
+       * either the second argument or the first, depending on the result of the previous statement. Check that.
+       */
+      try {
+         // if the 1st argument is a valid application, check if it has a controller matching the 2nd argument
+         if (in_array($Parts[0], $this->EnabledApplicationFolders()))
+            $this->FindController(1, $Parts);
+
+         // if no match, see if the first argument is a controller
+         $this->FindController(0, $Parts);
+
+         // 3] See if there is a plugin trying to create a root method.
+         list($MethodName, $DeliveryMethod) = $this->_SplitDeliveryMethod(GetValue(0, $Parts), TRUE);
+         if ($MethodName && Gdn::PluginManager()->HasNewMethod('RootController', $MethodName, TRUE)) {
+            $this->_DeliveryMethod = $DeliveryMethod;
+            $Parts[0] = $MethodName;
+            $Parts = array_merge(array('root'), $Parts);
+            $this->FindController(0, $Parts);
+         }
+
+         throw new GdnDispatcherControllerNotFoundException();
+      } catch (GdnDispatcherControllerFoundException $e) {
+
+         switch ($this->_DeliveryMethod) {
+            case DELIVERY_METHOD_JSON:
+            case DELIVERY_METHOD_XML:
+               $this->_DeliveryType = DELIVERY_TYPE_DATA;
+               break;
+            case DELIVERY_METHOD_TEXT:
+               $this->_DeliveryType = DELIVERY_TYPE_VIEW;
+               break;
+            case DELIVERY_METHOD_XHTML:
                break;
             default:
-               $this->_SyndicationMethod = SYNDICATION_NONE;
+               $this->_DeliveryMethod = DELIVERY_METHOD_XHTML;
                break;
          }
-      }
 
-      if ($this->Request == '')
-         $this->Request = $this->Routes['DefaultController'];
-
-      // Check for re-routing
-      // Is there a literal match?
-      if (isset($this->Routes[$this->Request])) {
-         $this->Request = $this->Routes[$this->Request];
-      } else {
-         // Check for other matching custom routes
-         foreach ($this->Routes as $Route => $Destination) {
-            // Check for wild-cards
-            $Route = str_replace(
-               array(':alphanum', ':num'),
-               array('([0-9a-zA-Z-_]+)', '([0-9]+)'),
-               $Route
-            );
-
-            // Check for a match
-            if (preg_match('#^'.$Route.'$#', $this->Request)) {
-               // Do we have a back-reference?
-               if (strpos($Destination, '$') !== FALSE && strpos($Route, '(') !== FALSE)
-                  $Destination = preg_replace('#^'.$Route.'$#', $Destination, $this->Request);
-
-               $this->Request = $Destination;
-            }
-         }
-      }
-
-      $Parts = explode('/', $this->Request);
-      $Length = count($Parts);
-      if ($Length == 1 || $FolderDepth <= 0) {
-         $FolderDepth = 0;
-         $this->_ControllerName = $Parts[0];
-         $this->_MapParts($Parts, 0);
-         $this->_FetchController(TRUE); // Throw an error if this fails because there's nothing else to check
-      } else if ($Length == 2) {
-         // Force a depth of 1 because only one of the two url parts can be a folder.
-         $FolderDepth = 1;
-      }
-      if ($FolderDepth == 2) {
-         $this->_ApplicationFolder = $Parts[0];
-         $this->_ControllerFolder = $Parts[1];
-         $this->_MapParts($Parts, 2);
-
-         if (!$this->_FetchController()) {
-            // echo '<div>Failed. AppFolder: '.$this->_ApplicationFolder.'; Cont Folder: '.$this->_ControllerFolder.'; Cont: '.$this->_ControllerName.';</div>';
-            $this->_AnalyzeRequest(1);
-         }
-
-      } else if ($FolderDepth == 1) {
-         // Try the application folder first
-         $Found = FALSE;
-         if (in_array($Parts[0], $this->EnabledApplicationFolders())) {
-            // Check to see if the first part is an application
-            $this->_ApplicationFolder = $Parts[0];
-            $this->_MapParts($Parts, 1);
-            $Found = $this->_FetchController();
-         }
-         if (!$Found) {
-            // echo '<div>Failed. AppFolder: '.$this->_ApplicationFolder.'; Cont Folder: '.$this->_ControllerFolder.'; Cont: '.$this->_ControllerName.';</div>';
-            // Check to see if the first part is a controller folder
-            $this->_ApplicationFolder = '';
-            $this->_ControllerFolder = $Parts[0];
-            $this->_MapParts($Parts, 1);
-            if (!$this->_FetchController()) {
-               // echo '<div>Failed. AppFolder: '.$this->_ApplicationFolder.'; Cont Folder: '.$this->_ControllerFolder.'; Cont: '.$this->_ControllerName.';</div>';
-               $this->_AnalyzeRequest(0);
-            }
-         }
-      }
-   }
-
-   /**
-    * Searches through the /cache/controller_mappings.php file for the requested
-    * controller. If it doesn't find it, it searches through the entire
-    * application's folders for the requested controller. If it finds the
-    * controller, it adds the mapping to /cache/controller_mappings.php so it
-    * won't need to search again. If it doesn't find the controller file
-    * anywhere, it throws a fatal error.
-    *
-    * @param boolean $ThrowErrorOnFailure
-    * @todo $ThrowErrorOnFailure needs a description.
-    */
-   private function _FetchController($ThrowErrorOnFailure = FALSE) {
-      $ControllerWhiteList = $this->EnabledApplicationFolders();
-      // Don't include it if it's already been included
-      if (!class_exists($this->ControllerName())) {
-         $PathParts = array('controllers');
-         if ($this->_ControllerFolder != '')
-            $PathParts[] = $this->_ControllerFolder;
-
-         $PathParts[] = strtolower($this->_ControllerName).'.php';
-         $ControllerFileName = CombinePaths($PathParts);
-
-         // Force the mapping to search in the app folder if it was in the request
-         if ($this->_ApplicationFolder != '' && InArrayI($this->_ApplicationFolder, $ControllerWhiteList)) {
-            // Limit the white list to the specified application folder
-            $ControllerWhiteList = array($this->_ApplicationFolder);
-         }
-
-         $ControllerPath = Gdn_FileSystem::FindByMapping('controller_mappings.php', 'Controller', PATH_APPLICATIONS, $ControllerWhiteList, $ControllerFileName);
-         if ($ControllerPath !== FALSE) {
-            // Strip the "Application Folder" from the controller path (this is
-            // used by the controller for various purposes. ie. knowing which
-            // application to search in for a view file).
-            $this->_ApplicationFolder = explode(DS, str_replace(PATH_APPLICATIONS . DS, '', $ControllerPath));
-            $this->_ApplicationFolder = $this->_ApplicationFolder[0];
-
-            // Load the application's master controller
-            if (!class_exists($this->_ApplicationFolder.'Controller'))
-               include(CombinePaths(array(PATH_APPLICATIONS, $this->_ApplicationFolder, 'controllers', 'appcontroller.php')));
-
-            // Now load the library (no need to check for existence - couldn't
-            // have made it here if it didn't exist).
-            include($ControllerPath);
-         }
-      }
-      if (!class_exists($this->ControllerName())) {
-         if ($ThrowErrorOnFailure === TRUE) {
-            if (ForceBool(Gdn::Config('Garden.Debug'))) {
-               trigger_error(ErrorMessage('Controller not found: '.$this->ControllerName(), 'Dispatcher', '_FetchController'), E_USER_ERROR);
-            } else {
-               // Return a 404 message
-               list($this->_ApplicationFolder, $this->_ControllerName, $this->_ControllerMethod) = explode('/', $this->Routes['Default404']);
-               $ControllerFileName = CombinePaths(array('controllers', strtolower($this->_ControllerName) . '.php'));
-               $ControllerPath = Gdn_FileSystem::FindByMapping('controller_mappings.php', 'Controller', PATH_APPLICATIONS, $ControllerWhiteList, $ControllerFileName);
-               include(CombinePaths(array(PATH_APPLICATIONS, $this->_ApplicationFolder, 'controllers', 'appcontroller.php')));
-               include($ControllerPath);
-            }
-         }
-         return FALSE;
-      } else {
          return TRUE;
+      } catch (GdnDispatcherControllerNotFoundException $e) {
+         header("HTTP/1.1 404 Not Found");
+         $Request->WithRoute('Default404');
+         return $this->AnalyzeRequest($Request);
       }
    }
 
+   protected function FindController($ControllerKey, $Parts) {
+      $Controller = GetValue($ControllerKey, $Parts, NULL);
+      $Controller = ucfirst(strtolower($Controller));
+      $Application = GetValue($ControllerKey-1, $Parts, NULL);
+
+      // Check for a file extension on the controller.
+      list($Controller, $this->_DeliveryMethod) = $this->_SplitDeliveryMethod($Controller, FALSE);
+      
+      // If we're loading from a fully qualified path, prioritize this app's library
+      if (!is_null($Application)) {
+         Gdn_Autoloader::Priority(
+            Gdn_Autoloader::CONTEXT_APPLICATION, 
+            $Application,
+            Gdn_Autoloader::MAP_CONTROLLER, 
+            Gdn_Autoloader::PRIORITY_TYPE_RESTRICT,
+            Gdn_Autoloader::PRIORITY_ONCE);
+      }
+      
+      $ControllerName = $Controller.'Controller';
+      $ControllerPath = Gdn_Autoloader::Lookup($ControllerName, array('Quiet' => TRUE));
+      if ($ControllerPath !== FALSE) {
+         
+         // This was a guess search with no specified application. Look up
+         // the application folder from the controller path.
+         if (is_null($Application)) {
+            $InterimPath = explode('/controllers/', $ControllerPath);
+            array_pop($InterimPath); // Get rid of the end. Useless;
+            $InterimPath = explode('/', trim(array_pop($InterimPath)));
+            $Application = array_pop($InterimPath);
+            if (!in_array($Application, $this->EnabledApplicationFolders()))
+               return FALSE;
+         }
+      
+         Gdn_Autoloader::Priority(
+            Gdn_Autoloader::CONTEXT_APPLICATION, 
+            $Application,
+            Gdn_Autoloader::MAP_CONTROLLER, 
+            Gdn_Autoloader::PRIORITY_TYPE_PREFER,
+            Gdn_Autoloader::PRIORITY_PERSIST);
+      
+         $this->_ControllerName = $Controller;
+         $this->_ApplicationFolder = (is_null($Application) ? '' : $Application);
+         $this->_ControllerFolder = '';
+         
+         $Length = sizeof($Parts);
+         if ($Length > $ControllerKey + 1)
+            list($this->_ControllerMethod, $this->_DeliveryMethod) = $this->_SplitDeliveryMethod($Parts[$ControllerKey + 1], FALSE);
+   
+         if ($Length > $ControllerKey + 2) {
+            for ($i = $ControllerKey + 2; $i < $Length; ++$i) {
+               if ($Parts[$i] != '')
+                  $this->_ControllerMethodArgs[] = $Parts[$i];
+            }
+         }
+         
+         require_once($ControllerPath);
+         
+         throw new GdnDispatcherControllerFoundException();
+      }
+      
+      return FALSE;
+   }
+   
    /**
     * An internal method used to map parts of the request to various properties
     * of this object that represent the controller, controller method, and
@@ -502,17 +616,84 @@ class Gdn_Dispatcher extends Gdn_Pluggable {
    private function _MapParts($Parts, $ControllerKey) {
       $Length = count($Parts);
       if ($Length > $ControllerKey)
-         $this->_ControllerName = $Parts[$ControllerKey];
+         $this->_ControllerName = ucfirst(strtolower($Parts[$ControllerKey]));
 
       if ($Length > $ControllerKey + 1)
-         $this->_ControllerMethod = $Parts[$ControllerKey + 1];
+         list($this->_ControllerMethod, $this->_DeliveryMethod) = $this->_SplitDeliveryMethod($Parts[$ControllerKey + 1]);
 
       if ($Length > $ControllerKey + 2) {
          for ($i = $ControllerKey + 2; $i < $Length; ++$i) {
             if ($Parts[$i] != '')
                $this->_ControllerMethodArgs[] = $Parts[$i];
-
          }
       }
    }
+
+   protected function _ReflectControllerArgs($Controller) {
+      // Reflect the controller arguments based on the get.
+      if (count($Controller->Request->Get()) == 0)
+         return;
+
+      if (!method_exists($Controller, $this->_ControllerMethod))
+         return;
+
+      $Meth = new ReflectionMethod($Controller, $this->_ControllerMethod);
+      $MethArgs = $Meth->getParameters();
+      $Args = array();
+      $Get = array_change_key_case($Controller->Request->Get());
+      $MissingArgs = array();
+      
+      if (count($MethArgs) == 0) {
+         // The method has no arguments so just pass all of the arguments in.
+         return;
+      }
+
+      // Set all of the parameters.
+      foreach ($MethArgs as $Index => $MethParam) {
+         $ParamName = strtolower($MethParam->getName());
+
+         if (isset($this->_ControllerMethodArgs[$Index]))
+            $Args[] = $this->_ControllerMethodArgs[$Index];
+         elseif (isset($Get[$ParamName]))
+            $Args[] = $Get[$ParamName];
+         elseif ($MethParam->isDefaultValueAvailable())
+            $Args[] = $MethParam->getDefaultValue();
+         else {
+            $Args[] = NULL;
+            $MissingArgs[] = "{$Index}: {$ParamName}";
+         }
+      }
+
+      $this->_ControllerMethodArgs = $Args;
+         
+   }
+
+   /**
+    * Parses methods that may be using dot-syntax to express a delivery type
+    * 
+    * For example, /controller/method.json
+    * method.json should be split up and return array('method', 'JSON')
+    * 
+    * @param type $Name Name of method to search for forced delivery types
+    * @param type $AllowAll Whether to allow delivery types that don't exist
+    * @return type 
+    */
+   protected function _SplitDeliveryMethod($Name, $AllowAll = FALSE) {
+      $Parts = explode('.', $Name);
+      if (count($Parts) >= 2) {
+         $DeliveryPart = array_pop($Parts);
+         $MethodPart = implode('.', $Parts);
+         
+         if ($AllowAll || in_array(strtoupper($DeliveryPart), array(DELIVERY_METHOD_JSON, DELIVERY_METHOD_XHTML, DELIVERY_METHOD_XML, DELIVERY_METHOD_TEXT))) {
+            return array($MethodPart, strtoupper($DeliveryPart));
+         } else {
+            return array($Name, $this->_DeliveryMethod);
+         }
+      } else {
+         return array($Name, $this->_DeliveryMethod);
+      }
+   }
 }
+
+class GdnDispatcherControllerNotFoundException extends Exception {}
+class GdnDispatcherControllerFoundException extends Exception {}

@@ -11,7 +11,7 @@ Contact Vanilla Forums Inc. at support [at] vanillaforums [dot] com
 
 /**
  * Renders an asset from the controller.
- * 
+ *
  * @param array The parameters passed into the function.
  * The parameters that can be passed to this function are as follows.
  * - <b>name</b>: The name of the asset.
@@ -27,23 +27,31 @@ function smarty_function_asset($Params, &$Smarty) {
 	$Class = ArrayValue('class', $Params, '');
 	if ($Class != '')
 		$Class = ' class="'.$Class.'"';
-	
-	$Controller = $Smarty->get_template_vars('Controller');
-	
-	// Get the asset from the controller.
-	$Asset = $Controller->GetAsset($Name);
-	
-   if(!is_string($Asset)) {
-		ob_start();
-		$Asset->Render();
-		$Asset = ob_get_contents();
-		ob_end_clean();
-	}
-	
-	if(!empty($Tag)) {
-		$Result = '<' . $Tag . ' id="' . $Id . '"'.$Class.'>' . $Asset . '</' . $Tag . '>';
-	} else {
-		$Result = $Asset;
-	}
-	return $Result;
+
+	$Controller = $Smarty->Controller;
+   $Controller->EventArguments['AssetName'] = $Name;
+
+   $Result = '';
+
+   ob_start();
+   $Controller->FireEvent('BeforeRenderAsset');
+   $Result .= ob_get_clean();
+
+   $Asset = $Controller->GetAsset($Name);
+   if (!is_string($Asset)) {
+      $Asset->AssetName = $Name;
+      $Asset = $Asset->ToString();
+   }
+
+   if (!empty($Tag)) {
+      $Result .= '<' . $Tag . ' id="' . $Id . '"'.$Class.'>' . $Asset . '</' . $Tag . '>';
+   } else {
+      $Result .= $Asset;
+   }
+
+   ob_start();
+   $Controller->FireEvent('AfterRenderAsset');
+   $Result .= ob_get_clean();
+
+   return $Result;
 }

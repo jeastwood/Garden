@@ -8,39 +8,47 @@ You should have received a copy of the GNU General Public License along with Gar
 Contact Vanilla Forums Inc. at support [at] vanillaforums [dot] com
 */
 
-/** 
+/**
  * A module that contains other modules.
  */
-class Gdn_ModuleCollection extends Module {
+class Gdn_ModuleCollection extends Gdn_Module {
    /// PROPERTIES ///
    public $Items = array();
-   
+
    /// METHODS ///
    public function Render() {
-      foreach($this->Items as $Item) {
-         if(is_string($Item)) {
-            echo $Item;
-         } elseif($Item instanceof Gdn_IModule) {
+      $RenderedCount = 0;
+      foreach ($this->Items as $Item) {
+         $this->EventArguments['AssetName'] = $this->AssetName;
+
+         if (is_string($Item)) {
+            if (!empty($Item)) {
+               if ($RenderedCount > 0)
+                  $this->FireEvent('BetweenRenderAsset');
+
+               echo $Item;
+               $RenderedCount++;
+            }
+         } elseif ($Item instanceof Gdn_IModule) {
+            $LengthBefore = ob_get_length();
             $Item->Render();
+            $LengthAfter = ob_get_length();
+
+            if ($LengthBefore !== FALSE && $LengthAfter > $LengthBefore) {
+               if ($RenderedCount > 0)
+                  $this->FireEvent('BetweenRenderAsset');
+               $RenderedCount++;
+            }
          } else {
             throw new Exception();
          }
       }
+      unset($this->EventArguments['AssetName']);
    }
-   
+
    public function ToString() {
-      $Result = '';
-      
-      foreach($this->Items as $Item) {
-         if(is_string($Item)) {
-            $Result .= $Item;
-         } elseif($Item instanceof Gdn_IModule) {
-            $Result .= $Item->ToString();
-         } else {
-            throw new Exception();
-         }
-      }
-      
-      return $Result;
+      ob_start();
+      $this->Render();
+      return ob_get_clean();
    }
 }

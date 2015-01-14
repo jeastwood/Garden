@@ -9,22 +9,18 @@ Contact Vanilla Forums Inc. at support [at] vanillaforums [dot] com
 */
 
 /**
- * Garden.Modules
- */
-
-/**
  * Renders a form that allows people to be added to conversations.
  */
-class AddPeopleModule extends Module {
+class AddPeopleModule extends Gdn_Module {
 
    public $Conversation;
    public $Form;
 
-   public function __construct(&$Sender = '') {
+   public function __construct($Sender = '') {
       $Session = Gdn::Session();
       if (property_exists($Sender, 'Conversation'))
          $this->Conversation = $Sender->Conversation;
-         
+
       $this->Form = Gdn::Factory('Form', 'AddPeople');
       // $this->Form->Action = $Sender->SelfUrl;
       // If the form was posted back, check for people to add to the conversation
@@ -34,7 +30,7 @@ class AddPeopleModule extends Module {
          $UserModel = Gdn::Factory("UserModel");
          foreach ($NewRecipients as $Name) {
             if (trim($Name) != '') {
-               $User = $UserModel->Get(trim($Name));
+               $User = $UserModel->GetByUsername(trim($Name));
                if (is_object($User))
                   $NewRecipientUserIDs[] = $User->UserID;
             }
@@ -42,14 +38,14 @@ class AddPeopleModule extends Module {
          $Sender->ConversationModel->AddUserToConversation($this->Conversation->ConversationID, $NewRecipientUserIDs);
          // if ($Sender->DeliveryType() == DELIVERY_TYPE_ALL)
          //    Redirect('/messages/'.$this->Conversation->ConversationID);
-            
-         $Sender->StatusMessage = Gdn::Translate('Your changes were saved.');
+
+         $Sender->InformMessage(T('Your changes were saved.'));
          $Sender->RedirectUrl = Url('/messages/'.$this->Conversation->ConversationID);
       }
       $this->_ApplicationFolder = $Sender->Application;
       $this->_ThemeFolder = $Sender->Theme;
-   }   
-   
+   }
+
    public function AssetTarget() {
       return 'Panel';
    }

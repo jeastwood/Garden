@@ -20,7 +20,14 @@ Contact Vanilla Forums Inc. at support [at] vanillaforums [dot] com
  * @todo Make this object deliver content with a save as dialogue.
  */
 
+if(!defined('VANILLA_FILE_PUT_FLAGS')) define('VANILLA_FILE_PUT_FLAGS', LOCK_EX);
+
 class Gdn_FileSystem {
+
+   const O_CREATE = 1;
+   const O_WRITE = 2;
+   const O_READ = 4;
+
    /**
     * Searches the provided file path(s). Returns the first one it finds in the
     * filesystem.
@@ -54,13 +61,13 @@ class Gdn_FileSystem {
    public static function Folders($SourceFolders) {
       if(!is_array($SourceFolders))
          $SourceFolders = array($SourceFolders);
-   
+
       $BlackList = Gdn::Config('Garden.FolderBlacklist');
       if (!is_array($BlackList))
          $BlackList = array('.', '..');
-         
+
       $Result = array();
-      
+
       foreach($SourceFolders as $SourceFolder) {
          if ($DirectoryHandle = opendir($SourceFolder)) {
             while (($Item = readdir($DirectoryHandle)) !== FALSE) {
@@ -134,7 +141,7 @@ class Gdn_FileSystem {
          $SourceFolders = array($SourceFolders);
 
       foreach ($SourceFolders as $SourceFolder) {
-         if (!is_array($WhiteList)) {
+         if ($WhiteList === FALSE) {
             $Path = CombinePaths(array($SourceFolder, $FileName));
             if (file_exists($Path)) {
                if ($ReturnFirst)
@@ -146,6 +153,10 @@ class Gdn_FileSystem {
             if ($DirectoryHandle = opendir($SourceFolder)) {
                if ($DirectoryHandle === FALSE)
                   trigger_error(ErrorMessage('Failed to open folder when performing a filesystem search.', 'Gdn_FileSystem', '_Find', $SourceFolder), E_USER_ERROR);
+
+               // Search all subfolders
+               if ($WhiteList === TRUE)
+                  $WhiteList = scandir($SourceFolder);
 
                $SubFolders = array();
                foreach ($WhiteList as $WhiteFolder) {
@@ -171,14 +182,13 @@ class Gdn_FileSystem {
    }
 
    /**
-    * Searches in the specified mapping file for $LibraryName. If a mapping is
+    * Searches in the specified mapping cache for $LibraryName. If a mapping is
     * found, it returns it. If not, it searches through the application
     * directories $Depth levels deep looking for $LibraryName. Returns FALSE
     * if not found.
     *
     * @param string $MappingsFileName The name of the mappings file to look in for library mappings. These
     * files are contained in the application's /cache folder.
-    * @param string $MappingsArrayName The variable name of the array in the mappings file that contains the mappings.
     * @param string $SourceFolders The path to the folders that should be considered the "root" of this search.
     * @param mixed $FolderWhiteList A white-list array of sub-folders within $SourceFolder in which the
     * search can be performed. If FALSE is specified instead, the search will
@@ -186,42 +196,31 @@ class Gdn_FileSystem {
     * @param string $LibraryName The name of the library to search for. This is a valid file name.
     * ie. "class.database.php"
     */
-   public static function FindByMapping($MappingsFileName, $MappingsArrayName, $SourceFolders, $FolderWhiteList, $LibraryName) {
+   public static function FindByMapping($MappingCacheName, $SourceFolders, $FolderWhiteList, $LibraryName) {
+
       // If the application folder was provided, it will be the only entry in the whitelist, so prepend it.
-      if ($FolderWhiteList !== FALSE && count($FolderWhiteList) == 1)
+      if (is_array($FolderWhiteList) && count($FolderWhiteList) == 1)
          $LibraryName = CombinePaths(array($FolderWhiteList[0], $LibraryName));
-         
+
       $LibraryKey = str_replace('.', '__', $LibraryName);
-         
-      $MappingsFile = PATH_CACHE . DS . $MappingsFileName;
-      $Config = Gdn::Factory(Gdn::AliasConfig);
-
-      $Mappings = Gdn::Config($MappingsArrayName, NULL);
-      if(is_null($Mappings)) {   
-         $Config->Load($MappingsFile, 'Use', $MappingsArrayName);
-         $Mappings = Gdn::Config($MappingsArrayName, array());
-      }
-      $LibraryPath = ArrayValue($LibraryKey, $Mappings, FALSE);
-
-      if ($LibraryPath === FALSE) {
+      Gdn_LibraryMap::PrepareCache($MappingCacheName);
+      $LibraryPath = Gdn_LibraryMap::GetCache($MappingCacheName, $LibraryKey);
+      if ($LibraryPath === NULL) {
          // $LibraryName wasn't contained in the mappings array.
          // I need to look through the folders in this application for the requested file.
          // Once I find it, I need to save the mapping so we don't have to search for it again.
 
          // Attempt to find the file directly off the root (if the app folder was provided in the querystring)
-         if ($FolderWhiteList !== FALSE && count($FolderWhiteList) == 1) {
+         /*if ($FolderWhiteList !== FALSE && count($FolderWhiteList) == 1) {
             $LibraryPath = self::Find($SourceFolders, $LibraryName);
          } else {
             $LibraryPath = self::Find($SourceFolders, $LibraryName, $FolderWhiteList);
-         }
+         }*/
+         $LibraryPath = self::Find($SourceFolders, $LibraryName, $FolderWhiteList);
 
-         // If the controller was found
-         if($LibraryPath !== FALSE) {
-            $Config = Gdn::Factory(Gdn::AliasConfig);
-            // Save the mapping
-            $Config->Load($MappingsFile, 'Save', $MappingsArrayName);
-            $Config->Set($MappingsArrayName.'.'.$LibraryKey, $LibraryPath);
-            $Config->Save($MappingsFile, $MappingsArrayName);
+         // If the mapping was found
+         if ($LibraryPath !== FALSE) {
+            Gdn_LibraryMap::Cache($MappingCacheName, $LibraryKey, $LibraryPath);
          }
       }
       return $LibraryPath;
@@ -261,11 +260,23 @@ class Gdn_FileSystem {
     * @param string $FileName The full path and name of the file to be saved.
     * @param string $FileContents The contents of the file being saved.
     */
-   public static function SaveFile($FileName, $FileContents) {
-      file_put_contents($FileName, $FileContents);
+   public static function SaveFile($FileName, $FileContents, $Flags = VANILLA_FILE_PUT_FLAGS) {
+
+      // Check that the folder exists and is writable
+      $DirName = dirname($FileName);
+      $FileBaseName = basename($FileName);
+      if (!is_dir($DirName))
+         throw new Exception(sprintf('Requested save operation [%1$s] could not be completed because target folder [%2$s] does not exist.',$FileBaseName,$DirName));
+
+      if (!IsWritable($DirName))
+         throw new Exception(sprintf('Requested save operation [%1$s] could not be completed because target folder [%2$s] is not writable.',$FileBaseName,$DirName));
+
+      if (file_put_contents($FileName, $FileContents, $Flags) === FALSE)
+         throw new Exception(sprintf('Requested save operation [%1$s] could not be completed!',$FileBaseName));
+
       return TRUE;
    }
-   
+
    /**
     * Similar to the unix touch command, this method checks to see if $FileName
     * exists. If it does not, it creates the file with nothing inside it.
@@ -274,65 +285,79 @@ class Gdn_FileSystem {
     */
    public static function Touch($FileName) {
       if (!file_exists($FileName))
-         file_put_contents($FileName, '');
+         file_put_contents($FileName, '', LOCK_EX);
    }
-   
+
    /**
     * Serves a file to the browser.
     *
-    * @param string $File The full path to the file being served.
-    * @param string $Name The name to give the file being served (don't include file extension, it will be added automatically). Will use file's name on disk if ignored.
+    * @param string $File Full path to the file being served.
+    * @param string $Name Name to give the file being served. Including extension overrides $File extension. Uses $File filename if empty.
     * @param string $MimeType The mime type of the file.
+    * @param string $ServeMode Whether to download the file as an attachment, or inline
     */
-   public static function ServeFile($File, $Name = '', $MimeType = '') {
-      if (is_readable($File)) {
-         // Get the db connection and make sure it is closed
-         $Database = Gdn::Database();
-         $Database->CloseConnection();
-         
-         $Size = filesize($File);
-         $Extension = strtolower(pathinfo($File, PATHINFO_EXTENSION));
-         if ($Name == '') {
-            $Name = pathinfo($File, PATHINFO_FILENAME);
+   public static function ServeFile($File, $Name = '', $MimeType = '', $ServeMode = 'attachment') {
+
+      $FileIsLocal = (substr($File, 0, 4) == 'http') ? FALSE : TRUE;
+      $FileAvailable = ($FileIsLocal) ? is_readable($File) : TRUE;
+
+      if ($FileAvailable) {
+         // Close the database connection
+         Gdn::Database()->CloseConnection();
+
+         // Determine if Path extension should be appended to Name
+         $NameExtension = strtolower(pathinfo($Name, PATHINFO_EXTENSION));
+         $FileExtension = strtolower(pathinfo($File, PATHINFO_EXTENSION));
+         if ($NameExtension == '') {
+            if ($Name == '') {
+               $Name = pathinfo($File, PATHINFO_FILENAME) . '.' . $FileExtension;
+            } elseif (!StringEndsWith($Name, '.'.$FileExtension)) {
+             $Name .= '.'.$FileExtension;
+            }
          } else {
-            $Name .= '.'.$Extension;
+            $Extension = $NameExtension;
          }
          $Name = rawurldecode($Name);
- 
+
          // Figure out the MIME type
          $MimeTypes = array(
-           "pdf" => "application/pdf",
-           "txt" => "text/plain",
+           "pdf"  => "application/pdf",
+           "txt"  => "text/plain",
            "html" => "text/html",
-           "htm" => "text/html",
-           "exe" => "application/octet-stream",
-           "zip" => "application/zip",
-           "doc" => "application/msword",
-           "xls" => "application/vnd.ms-excel",
-           "ppt" => "application/vnd.ms-powerpoint",
-           "gif" => "image/gif",
-           "png" => "image/png",
-           "jpeg"=> "image/jpg",
-           "jpg" =>  "image/jpg",
-           "php" => "text/plain"
+           "htm"  => "text/html",
+           "exe"  => "application/octet-stream",
+           "zip"  => "application/zip",
+           "doc"  => "application/msword",
+           "xls"  => "application/vnd.ms-excel",
+           "ppt"  => "application/vnd.ms-powerpoint",
+           "gif"  => "image/gif",
+           "png"  => "image/png",
+           "jpeg" => "image/jpg",
+           "jpg"  => "image/jpg",
+           "php"  => "text/plain",
+           "ico"  => "image/vnd.microsoft.icon"
          );
-         
+
          if ($MimeType == '') {
-            if (array_key_exists($Extension, $MimeTypes)){
-              $MimeType = $MimeTypes[$Extension];
+            if (array_key_exists($FileExtension, $MimeTypes)){
+              $MimeType = $MimeTypes[$FileExtension];
             } else {
               $MimeType = 'application/force-download';
             };
          };
-         
+
          @ob_end_clean();
-         
+
          // required for IE, otherwise Content-Disposition may be ignored
-         if(ini_get('zlib.output_compression'))
+         if (ini_get('zlib.output_compression'))
             ini_set('zlib.output_compression', 'Off');
-         
-         header('Content-Type: ' . $MimeType);
-         header('Content-Disposition: attachment; filename="'.$Name.'"');
+
+         if ($ServeMode == 'inline')
+            header('Content-Disposition: inline; filename="'.$Name.'"');
+         else
+            header('Content-Disposition: attachment; filename="'.$Name.'"');
+
+         header('Content-Type: '.$MimeType);
          header("Content-Transfer-Encoding: binary");
          header('Accept-Ranges: bytes');
          header("Cache-control: private");
@@ -340,26 +365,154 @@ class Gdn_FileSystem {
          header("Expires: Mon, 26 Jul 1997 05:00:00 GMT");
          readfile($File);
          exit();
+      } else {
+         die('not readable');
       }
    }
-   
+
    /**
     * Remove a folder (and all the sub-folders and files).
     * Taken from http://php.net/manual/en/function.rmdir.php
-    * 
-    * @param string $Dir 
+    *
+    * @param string $Dir
     * @return void
     */
-   public static function RemoveFolder($Dir) {
-      $Files = glob($Dir . '*', GLOB_MARK);
-      
-      foreach ($Files as $File) {
-         if (substr($File, -1) == '/')
-            self::RemoveFolder($File);
-         else
-            unlink($File);
+   public static function RemoveFolder($Path) {
+      if (!file_exists($Path))
+         return;
+
+      if (is_file($Path)) {
+         unlink($Path);
+         return;
       }
 
-      if (is_dir($Dir)) rmdir($Dir);
+      $Path = rtrim($Path, '/').'/';
+
+      // Get all of the files in the directory.
+      if ($dh = opendir($Path)) {
+         while (($File = readdir($dh)) !== false) {
+            if (trim($File, '.') == '')
+               continue;
+
+            $SubPath = $Path.$File;
+
+            if (is_dir($SubPath))
+               self::RemoveFolder($SubPath);
+            else
+               unlink($SubPath);
+         }
+         closedir($dh);
+      }
+      rmdir($Path);
    }
+
+   public static function CheckFolderR($Path, $Flags = 0) {
+      $TrimPath = ltrim($Path, '/');
+      $PathParts = explode('/', $TrimPath);
+      $Prepend = (strlen($Path) !== strlen($TrimPath)) ? DS : '';
+
+      $CurrentPath = array();
+      foreach ($PathParts as $FolderPart) {
+         array_push($CurrentPath, $FolderPart);
+         $TestFolder = $Prepend.implode(DS, $CurrentPath);
+
+         if ($Flags & Gdn_FileSystem::O_CREATE) {
+            if (!is_dir($TestFolder))
+               @mkdir($TestFolder);
+         }
+
+         if (!is_dir($TestFolder))
+            return FALSE;
+
+      }
+
+      if ($Flags & Gdn_FileSystem::O_READ) {
+         if (!is_readable($Path))
+            return FALSE;
+      }
+
+      if ($Flags & Gdn_FileSystem::O_WRITE) {
+         if (!is_writable($Path))
+            return FALSE;
+      }
+      return TRUE;
+   }
+
+    /**
+     * Copy file or folder from source to destination
+     *
+     * It can do recursive copy as well and is very smart
+     * It recursively creates the dest file or directory path if there weren't exists
+     * Situtaions :
+     * - Src:/home/test/file.txt ,Dst:/home/test/b ,Result:/home/test/b -> If source was file copy file.txt name with b as name to destination
+     * - Src:/home/test/file.txt ,Dst:/home/test/b/ ,Result:/home/test/b/file.txt -> If source was file Creates b directory if does not exsits and copy file.txt into it
+     * - Src:/home/test ,Dst:/home/ ,Result:/home/test/** -> If source was directory copy test directory and all of its content into dest
+     * - Src:/home/test/ ,Dst:/home/ ,Result:/home/**-> if source was direcotry copy its content to dest
+     * - Src:/home/test ,Dst:/home/test2 ,Result:/home/test2/** -> if source was directoy copy it and its content to dest with test2 as name
+     * - Src:/home/test/ ,Dst:/home/test2 ,Result:->/home/test2/** if source was directoy copy it and its content to dest with test2 as name
+     *
+     * @author Sina Salek - http://sina.salek.ws/en/contact
+     * @param $source //file or folder
+     * @param $dest ///file or folder
+     * @param $options //folderPermission,filePermission
+     * @return boolean
+     */
+   public static function Copy($source, $dest, $options=array('folderPermission'=>0755,'filePermission'=>0755)){
+      $result=false;
+
+      if (is_file($source)) {
+         if ($dest[strlen($dest)-1]=='/') {
+             if (!file_exists($dest)) {
+                 cmfcDirectory::makeAll($dest,$options['folderPermission'],true);
+             }
+             $__dest=$dest."/".basename($source);
+         } else {
+             $__dest=$dest;
+         }
+         $result=copy($source, $__dest);
+         chmod($__dest,$options['filePermission']);
+
+      } elseif(is_dir($source)) {
+         if ($dest[strlen($dest)-1]=='/') {
+             if ($source[strlen($source)-1]=='/') {
+                 //Copy only contents
+             } else {
+                 //Change parent itself and its contents
+                 $dest=$dest.basename($source);
+                 @mkdir($dest);
+                 chmod($dest,$options['filePermission']);
+             }
+         } else {
+             if ($source[strlen($source)-1]=='/') {
+                 //Copy parent directory with new name and all its content
+                 @mkdir($dest,$options['folderPermission']);
+                 chmod($dest,$options['filePermission']);
+             } else {
+                 //Copy parent directory with new name and all its content
+                 @mkdir($dest,$options['folderPermission']);
+                 chmod($dest,$options['filePermission']);
+             }
+         }
+
+         $dirHandle=opendir($source);
+         while($file=readdir($dirHandle))
+         {
+             if($file!="." && $file!="..")
+             {
+                  if(!is_dir($source."/".$file)) {
+                     $__dest=$dest."/".$file;
+                 } else {
+                     $__dest=$dest."/".$file;
+                 }
+                 $result=Gdn_FileSystem::Copy($source."/".$file, $__dest, $options);
+             }
+         }
+         closedir($dirHandle);
+
+      } else {
+         $result=false;
+      }
+      return $result;
+   }
+
 }

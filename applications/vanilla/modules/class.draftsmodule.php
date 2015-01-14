@@ -8,21 +8,14 @@
  * Renders user drafts. If rendered within a discussion, it only shows drafts
  * related to that discussion.
  */
-class DraftsModule extends Module {
-   
-   protected $_DraftData;
+class DraftsModule extends Gdn_Module {
+
    public $Form;
-   
-   public function __construct(&$Sender = '') {
-      $this->_DraftData = FALSE;
-      parent::__construct($Sender);
-   }
-   
    public function GetData($Limit = 20, $DiscussionID = '') {
       $Session = Gdn::Session();
       if ($Session->IsValid()) {
-         $DraftModel = new Gdn_DraftModel();
-         $this->_DraftData = $DraftModel->Get($Session->UserID, 0, $Limit, $DiscussionID);
+         $DraftModel = new DraftModel();
+         $this->Data = $DraftModel->Get($Session->UserID, 0, $Limit, $DiscussionID);
       }
       $this->Form = $this->_Sender->Form;
    }
@@ -32,7 +25,7 @@ class DraftsModule extends Module {
    }
 
    public function ToString() {
-      if ($this->_DraftData !== FALSE && $this->_DraftData->NumRows() > 0)
+      if (is_object($this->Data) && $this->Data->NumRows() > 0)
          return parent::ToString();
 
       return '';

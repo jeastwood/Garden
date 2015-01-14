@@ -14,12 +14,14 @@ jQuery(document).ready(function($) {
               // Add a spinner
               var btn = $(frm).find('input.Button:last');
               if ($(btn).parent().find('span.Progress').length == 0) {
-                 $(btn).after('<span class="Progress">&nbsp;</span>');
+                 $(btn).after('<span class="Progress">&#160;</span>');
               }
             },
             success: function(json, status, $frm) {
+               json = $.postParseJson(json);
+
                if (json.FormSaved == true) {
-                  inform(json.StatusMessage);
+                  gdn.inform(json);
                   if (json.RedirectUrl) {
                      setTimeout("document.location='" + json.RedirectUrl + "';", 300);
                   } else if(json.DeliveryType == 'ASSET') {
@@ -33,7 +35,7 @@ jQuery(document).ready(function($) {
                   if(json.Target) {
                      $(json.Target).html(json.Data);
                   } else if(json.DeliveryType == 'MESSAGE') {
-                     inform(json.Data, false);
+                     gdn.inform(json.Data, false);
                      $frm.find('span.Progress').remove();
                   } else {
                      $frm.parents($(handle).selector).html(json.Data);
@@ -44,18 +46,18 @@ jQuery(document).ready(function($) {
                   for(var i = 0; i < json.Targets.length; i++) {
                      var item = json.Targets[i];
                      if(item.Type == 'Text') {
-                        $(item.Target).text(item.Data);
+                        $(item.Target).text($.base64Decode(item.Data));
                      } else {
-                        $(item.Target).html(item.Data);
+                        $(item.Target).html($.base64Decode(item.Data));
                      }
                   }
                }
-               
+
                // Re-attach the handler
                $($(handle).selector).handleAjaxForm(options);
              }
          }, options || {});
-         
+
          $(this).ajaxForm(options);
       });
    }

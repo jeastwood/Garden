@@ -9,16 +9,12 @@ Contact Vanilla Forums Inc. at support [at] vanillaforums [dot] com
 */
 
 /**
- * Garden.Modules
- */
-
-/**
  * Renders the "Clear Conversation History" button.
  */
-class ClearHistoryModule extends Module {
-   
+class ClearHistoryModule extends Gdn_Module {
+
    protected $ConversationID;
-   
+
    public function ConversationID($ConversationID) {
       $this->ConversationID = $ConversationID;
    }

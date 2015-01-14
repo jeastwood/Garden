@@ -2,30 +2,43 @@
 $CountDiscussions = 0;
 $CategoryID = isset($this->_Sender->CategoryID) ? $this->_Sender->CategoryID : '';
 
-if ($this->_CategoryData !== FALSE) {
-   foreach ($this->_CategoryData->Result() as $Category) {
+if ($this->Data !== FALSE) {
+   foreach ($this->Data->Result() as $Category) {
       $CountDiscussions = $CountDiscussions + $Category->CountDiscussions;
    }
    ?>
-<div class="Box">
-   <h4><?php echo Gdn::Translate('Categories'); ?></h4>
-   <ul class="PanelInfo">
+<div class="Box BoxCategories">
+   <h4><?php echo Anchor(T('Categories'), 'categories/all'); ?></h4>
+   <ul class="PanelInfo PanelCategories">
       <li<?php
       if (!is_numeric($CategoryID))
          echo ' class="Active"';
-         
-      ?>><strong><?php echo Anchor(Format::Text(Gdn::Translate('All Discussions')), '/discussions'); ?></strong> <?php echo $CountDiscussions; ?></li>
-      <?php
-   foreach ($this->_CategoryData->Result() as $Category) {
-      ?>
-      <li<?php
-      if ($CategoryID == $Category->CategoryID)
-         echo ' class="Active"';
-         
-      ?>><strong><?php echo Anchor(Format::Text($Category->Name), '/categories/'.urlencode($Category->Name)); ?></strong> <?php echo $Category->CountDiscussions; ?></li>
-      <?php
+
+      ?>><span><strong><?php echo Anchor(Gdn_Format::Text(T('All Discussions')), '/discussions'); ?></strong><span class="Count"><?php echo number_format($CountDiscussions); ?></span></span></li>
+<?php
+   $MaxDepth = C('Vanilla.Categories.MaxDisplayDepth');
+   $DoHeadings = C('Vanilla.Categories.DoHeadings');
+
+   foreach ($this->Data->Result() as $Category) {
+      if ($Category->CategoryID < 0 || $MaxDepth > 0 && $Category->Depth > $MaxDepth)
+         continue;
+
+      if ($DoHeadings && $Category->Depth == 1)
+         $CssClass = 'Heading';
+      else
+         $CssClass = 'Depth'.$Category->Depth.($CategoryID == $Category->CategoryID ? ' Active' : '');
+
+      echo '<li class="'.$CssClass.'">';
+
+      if ($DoHeadings && $Category->Depth == 1) {
+         echo Gdn_Format::Text($Category->Name);
+      } else {
+         echo Wrap(Anchor(Gdn_Format::Text($Category->Name), '/categories/'.rawurlencode($Category->UrlCode)), 'strong')
+            .'<span class="Count">'.number_format($Category->CountAllDiscussions).'</span>';
+      }
+      echo "</li>\n";
    }
-      ?>
+?>
    </ul>
 </div>
    <?php

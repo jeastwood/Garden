@@ -30,7 +30,7 @@ Contact Vanilla Forums Inc. at support [at] vanillaforums [dot] com
  *
  * @package Garden
  */
-abstract class Gdn_Pluggable {
+abstract class Gdn_Pluggable extends Gdn_SliceProvider {
 
 
    /**
@@ -68,7 +68,7 @@ abstract class Gdn_Pluggable {
     *
     * @var array
     */
-   public $Returns;
+   public $Returns = array();
 
 
    /**
@@ -118,11 +118,13 @@ abstract class Gdn_Pluggable {
     * @param string $EventName The name of the event being fired.
     */
    public function FireEvent($EventName) {
-      // Look to the PluginManager to see if there are related event handlers
-      $PluginManager = Gdn::Factory('PluginManager');
+      if (!$this->ClassName) {
+         $RealClassName = get_class($this);
+         throw new Exception("Event fired from pluggable class '{$RealClassName}', but Gdn_Pluggable::__construct() was never called.");
+      }
 
-      // Call any related event handlers
-      $PluginManager->CallEventHandlers($this, $this->ClassName, $EventName);
+      // Look to the PluginManager to see if there are related event handlers and call them
+      return Gdn::PluginManager()->CallEventHandlers($this, $this->ClassName, $EventName);
    }
 
 
@@ -149,7 +151,6 @@ abstract class Gdn_Pluggable {
     *
     */
    public function __call($MethodName, $Arguments) {
-      $PluginManager = Gdn::Factory('PluginManager');
       // Define a return variable.
       $Return = FALSE;
 
@@ -167,7 +168,7 @@ abstract class Gdn_Pluggable {
       // Make sure that $ActualMethodName exists before continuing:
       if (!method_exists($this, $ActualMethodName)) {
          // Make sure that a plugin is not handling the call
-         if (!$PluginManager->HasNewMethod($this->ClassName, $ReferenceMethodName))
+         if (!Gdn::PluginManager()->HasNewMethod($this->ClassName, $ReferenceMethodName))
             trigger_error(ErrorMessage('The "' . $this->ClassName . '" object does not have a "' . $ActualMethodName . '" method.', $this->ClassName, $ActualMethodName), E_USER_ERROR);
       }
 
@@ -175,16 +176,16 @@ abstract class Gdn_Pluggable {
       $this->EventArguments = $Arguments;
 
       // Call the "Before" event handlers
-      $PluginManager->CallEventHandlers($this, $this->ClassName, $ReferenceMethodName, 'Before');
+      Gdn::PluginManager()->CallEventHandlers($this, $this->ClassName, $ReferenceMethodName, 'Before');
 
       // Call this object's method
-      if ($PluginManager->HasMethodOverride($this->ClassName, $ReferenceMethodName) === TRUE) {
+      if (Gdn::PluginManager()->HasMethodOverride($this->ClassName, $ReferenceMethodName)) {
          // The method has been overridden
          $this->HandlerType = HANDLER_TYPE_OVERRIDE;
-         $Return = $PluginManager->CallMethodOverride($this, $this->ClassName, $ReferenceMethodName);
-      } else if ($PluginManager->HasNewMethod($this->ClassName, $ReferenceMethodName) === TRUE) {
+         $Return = Gdn::PluginManager()->CallMethodOverride($this, $this->ClassName, $ReferenceMethodName);
+      } else if (Gdn::PluginManager()->HasNewMethod($this->ClassName, $ReferenceMethodName)) {
          $this->HandlerType = HANDLER_TYPE_NEW;
-         $Return = $PluginManager->CallNewMethod($this, $this->ClassName, $ReferenceMethodName);
+         $Return = Gdn::PluginManager()->CallNewMethod($this, $this->ClassName, $ReferenceMethodName);
       } else {
          // The method has not been overridden
          $Count = count($Arguments);
@@ -204,7 +205,7 @@ abstract class Gdn_Pluggable {
       }
 
       // Call the "After" event handlers
-      $PluginManager->CallEventHandlers($this, $this->ClassName, $MethodName, 'After');
+      Gdn::PluginManager()->CallEventHandlers($this, $this->ClassName, $MethodName, 'After');
 
       return $Return;
    }

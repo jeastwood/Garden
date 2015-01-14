@@ -81,14 +81,22 @@ class Gdn_ConfigurationModel {
       if (is_array($FieldName) === FALSE)
          $FieldName = array($FieldName);
 
-      $Count = count($FieldName);
-      for ($i = 0; $i < $Count; ++$i) {
-         if($this->Name == 'Configuration')
-            $Name = $FieldName[$i];
+      foreach($FieldName as $Index => $Value) {
+         if(is_numeric($Index)) {
+            $NameKey = $Value;
+            $Default = '';
+         } else {
+            $NameKey = $Index;
+            $Default = $Value;
+         }
+         /*
+         if ($this->Name != 'Configuration')
+            $Name = $NameKey;
          else
-            $Name = $this->Name.'.'.$FieldName[$i];
-            
-         $this->Data[$FieldName[$i]] = $Config->Get($Name, '');
+            $Name = $this->Name.'.'.$NameKey;
+         */
+
+         $this->Data[$NameKey] = $Config->Get($NameKey, $Default);
       }
    }
 
@@ -133,7 +141,7 @@ class Gdn_ConfigurationModel {
     * @param array $FormPostValues An associative array of $Field => $Value pairs that represent data posted
     * from the form in the $_POST or $_GET collection.
     */
-   public function Save($FormPostValues) {
+   public function Save($FormPostValues, $Live = FALSE) {
       // Fudge your way through the schema application. This will allow me to
       // force the validation object to expect the fieldnames contained in
       // $this->Data.
@@ -144,8 +152,14 @@ class Gdn_ConfigurationModel {
          $Settings = $this->Validation->ValidationFields();
          if (is_array($this->_ForceSettings))
             $Settings = MergeArrays($Settings, $this->_ForceSettings);
-            
-         return SaveToConfig($Settings);
+
+         $SaveResults = SaveToConfig($Settings);
+
+         // If the Live flag is true, set these in memory too
+         if ($SaveResults && $Live)
+            Gdn::Config()->Set($Settings, TRUE);
+
+         return $SaveResults;
       } else {
          return FALSE;
       }

@@ -1,20 +1,21 @@
 jQuery(document).ready(function($) {
-   
-   // Handle bookmark button clicks   
+
+   // Handle bookmark button clicks
    $('a.Bookmark').live('click', function() {
       var btn = this;
       var parent = $(this).parents('.Bookmarks');
-      var oldClass = $(btn).attr('class');
       $(btn).addClass('Bookmarking');
       $.ajax({
          type: "POST",
          url: btn.href,
          data: 'DeliveryType=BOOL&DeliveryMethod=JSON',
          dataType: 'json',
+         complete: function() {
+            $(btn).removeClass('Bookmarking');
+         },
          error: function(XMLHttpRequest, textStatus, errorThrown) {
-            // Popup the error
-            $(btn).attr('class', oldClass);
-            $.popup({}, definition('TransportError').replace('%s', textStatus));
+            // Popup the error.
+            $.popup({}, XMLHttpRequest.responseText);
          },
          success: function(json) {
             // Remove this row if looking at a list of bookmarks
@@ -24,21 +25,24 @@ jQuery(document).ready(function($) {
                $(parent).slideUp('fast', function() { $(this).remove(); });
             } else if ($(parent).length > 0) {
                // Remove the affected row
-               $(btn).parents('.DiscussionRow').slideUp('fast', function() { $(this).remove(); });
+               $(btn).parents('li.Item').slideUp('fast', function() { $(this).remove(); });
             } else {
                // Otherwise just change the class & title on the anchor
                $(btn).attr('title', json.AnchorTitle);
-               $(btn).attr('class', 'Bookmark');
                if (json.State == '1')
                   $(btn).addClass('Bookmarked');
-                  
+               else
+                  $(btn).removeClass('Bookmarked');
+
+               $('.CountBookmarks', $(btn)).text(json.CountDiscussionBookmarks);
+
             }
-            $('ul#Menu li.MyBookmarks a').html(json.MenuLink);
+            $('a.MyBookmarks').html(json.MenuText+'<span>'+json.CountBookmarks+'</span>');
             // Add/remove the bookmark from the side menu.
-            processTargets(json.Targets);
+            gdn.processTargets(json.Targets);
          }
       });
       return false;
-   });   
+   });
 
 });

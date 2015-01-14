@@ -82,7 +82,7 @@ if (!function_exists('ValidateConnection')) {
             $DatabasePassword
          );
       } catch (PDOException $Exception) {
-         return sprintf(Gdn::Translate('ValidateConnection'), strip_tags($Exception->getMessage()));
+         return sprintf(T('ValidateConnection'), strip_tags($Exception->getMessage()));
       }
       return TRUE;
    }
@@ -92,7 +92,7 @@ if (!function_exists('ValidateOldPassword')) {
    function ValidateOldPassword($Value, $Field, $FormPostedValues) {
       $OldPassword = ArrayValue('OldPassword', $FormPostedValues, '');
       $Session = Gdn::Session();
-      $UserModel = new Gdn_UserModel();
+      $UserModel = new UserModel();
       $UserID = $Session->UserID;
       return (bool) $UserModel->ValidateCredentials(
          '', $UserID, $OldPassword);
@@ -101,37 +101,80 @@ if (!function_exists('ValidateOldPassword')) {
 
 if (!function_exists('ValidateEmail')) {
    function ValidateEmail($Value, $Field = '') {
+      $Result = PHPMailer::ValidateAddress($Value);
+      $Result = (bool)$Result;
+      return $Result;
+   }
+}
+
+if (!function_exists('ValidateWebAddress')) {
+   function ValidateWebAddress($Value, $Field = '') {
+      if ($Value == '')
+         return TRUE; // Required picks up this error
+
+      return filter_var($Value, FILTER_VALIDATE_URL, FILTER_FLAG_SCHEME_REQUIRED) !== FALSE;
+   }
+}
+
+if (!function_exists('ValidateUsernameRegex')) {
+   function ValidateUsernameRegex() {
+      static $ValidateUsernameRegex;
+
+      if (is_null($ValidateUsernameRegex)) {
+         $ValidateUsernameRegex = sprintf("[%s]%s",
+            C("Garden.User.ValidationRegex","\d\w_"),
+            C("Garden.User.ValidationLength","{3,20}"));
+      }
+
+      return $ValidateUsernameRegex;
+   }
+}
+
+if (!function_exists('ValidateUsername')) {
+   function ValidateUsername($Value, $Field = '') {
+      $ValidateUsernameRegex = ValidateUsernameRegex();
+
       return ValidateRegex(
          $Value,
-         '/^([\w\d+_-][\w\d+_.-]{0,63})@(([\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3})|([\w\d][\w\d.-]{0,244}\.[\w]{2,10}))$/'
+         "/^({$ValidateUsernameRegex})?$/siu"
       );
    }
 }
-if (!function_exists('ValidateUsername')) {
-   function ValidateUsername($Value, $Field = '') {
+
+if (!function_exists('ValidateUrlString')) {
+   function ValidateUrlString($Value, $Field = '') {
       return ValidateRegex(
          $Value,
-         '/^([\d\w_]{3,20})$/si'
+         '/^([\d\w_\-]+)?$/si'
       );
+   }
+}
+
+if (!function_exists('ValidateUrlStringRelaxed')) {
+   function ValidateUrlStringRelaxed($Value, $Field = '') {
+      if (preg_match('`[/\\\<>\'"]`', $Value))
+         return FALSE;
+      return TRUE;
    }
 }
 
 if (!function_exists('ValidateDate')) {
    function ValidateDate($Value) {
       // Dates should be in YYYY-MM-DD or YYYY-MM-DD HH:MM:SS format
-      if (preg_match("/^[\d]{4}-{1}[\d]{2}-{1}[\d]{2}$/", $Value) == 1) {
-         $Year = intval(substr($Value, 0, 4));
-         $Month = intval(substr($Value, 5, 2));
-         $Day = intval(substr($Value, 8));
-         return checkdate($Month, $Day, $Year);
-      } else if (preg_match("/^[\d]{4}-{1}[\d]{2}-{1}[\d]{2}[\s]{1}[\d]{2}[:]{1}[\d]{2}[:]{1}[\d]{2}$/", $Value) == 1) {
-         $Year = intval(substr($Value, 0, 4));
-         $Month = intval(substr($Value, 5, 2));
-         $Day = intval(substr($Value, 8, 4));
-         $Hour = intval(substr($Value, 11, 2));
-         $Minute = intval(substr($Value, 14, 2));
-         $Second = intval(substr($Value, 17, 2));
-         return checkdate($Month, $Day, $Year) && $Hour < 24 && $Minute < 61 && $Second < 61;
+      if (empty($Value)) {
+			return TRUE; // blank dates validated through required.
+		} else {
+			$Matches = array();
+			if(preg_match('/^(\d{4})-(\d{2})-(\d{2})(?:\s{1}(\d{2}):(\d{2})(?::(\d{2}))?)?$/', $Value, $Matches)) {
+				$Year = $Matches[1];
+				$Month = $Matches[2];
+				$Day = $Matches[3];
+				$Hour = ArrayValue(4, $Matches, 0);
+				$Minutes = ArrayValue(5, $Matches, 0);
+				$Seconds = ArrayValue(6, $Matches, 0);
+
+            return checkdate($Month, $Day, $Year) && $Hour < 24 && $Minutes < 61 && $Seconds < 61;
+         }
       }
 
       return FALSE;
@@ -140,28 +183,30 @@ if (!function_exists('ValidateDate')) {
 
 if (!function_exists('ValidateMinimumAge')) {
    function ValidateMinimumAge($Value, $Field, $FormPostedValues) {
+      $MinimumAge = C('Garden.Validate.MinimumAge', 13);
       // Dates should be in YYYY-MM-DD format
       if (preg_match("/^[\d]{4}-{1}[\d]{2}-{1}[\d]{2}$/", $Value) == 1) {
          $Year = intval(substr($Value, 0, 4));
          $Month = intval(substr($Value, 5, 2));
          $Day = intval(substr($Value, 8));
-         // The minimum age for joining is 13 years before now.
          $CurrentDay = date('j');
          $CurrentMonth = date('n');
          $CurrentYear = date('Y');
-         if ($Year + 13 < $CurrentYear
-            || ($Year + 13 == $CurrentYear && $Month < $CurrentMonth)
-            || ($Year + 13 == $CurrentYear && $Month == $CurrentMonth && $Day <= $CurrentDay))
+         // The minimum age for joining is 13 years before now.
+         if ($Year + $MinimumAge < $CurrentYear
+            || ($Year + $MinimumAge == $CurrentYear && $Month < $CurrentMonth)
+            || ($Year + $MinimumAge == $CurrentYear && $Month == $CurrentMonth && $Day <= $CurrentDay))
             return TRUE;
-
       }
-
-      return FALSE;
+      return T('ValidateMinimumAge', 'You must be at least ' . $MinimumAge . ' years old to proceed.');
    }
 }
 
 if (!function_exists('ValidateInteger')) {
-   function ValidateInteger($Value, $Field) {
+   function ValidateInteger($Value, $Field = NULL) {
+      if (!$Value || (is_string($Value) && !trim($Value)))
+         return TRUE;
+
       $Integer = intval($Value);
       $String = strval($Integer);
       return $String == $Value ? TRUE : FALSE;
@@ -177,7 +222,8 @@ if (!function_exists('ValidateBoolean')) {
 
 if (!function_exists('ValidateDecimal')) {
    function ValidateDecimal($Value, $Field) {
-      return is_numeric($Value);
+       if (is_object($Field) && $Field->AllowNull && $Value === NULL) return TRUE;
+       return is_numeric($Value);
    }
 }
 
@@ -197,11 +243,15 @@ if (!function_exists('ValidateTimestamp')) {
 
 if (!function_exists('ValidateLength')) {
    function ValidateLength($Value, $Field) {
-      $Diff = strlen($Value) - $Field->Length;
+      if (function_exists('mb_strlen'))
+         $Diff = mb_strlen($Value, 'UTF-8') - $Field->Length;
+      else
+         $Diff = strlen($Value) - $Field->Length;
+
       if ($Diff <= 0) {
          return TRUE;
       } else {
-         return sprintf(Gdn::Translate('ValidateLength'), Translate($Field->Name), $Diff);
+         return sprintf(T('ValidateLength'), T($Field->Name), $Diff);
       }
    }
 }
@@ -227,7 +277,7 @@ if (!function_exists('ValidatePermissionFormat')) {
       $PermissionCount = count($Permission);
       for ($i = 0; $i < $PermissionCount; ++$i) {
          if (count(explode('.', $Permission[$i])) < 3)
-            return sprintf(Gdn::Translate('The following permission did not meet the permission naming requirements and could not be added: %s'), $Permission[$i]);
+            return sprintf(T('The following permission did not meet the permission naming requirements and could not be added: %s'), $Permission[$i]);
 
       }
       return TRUE;
@@ -246,3 +296,55 @@ if (!function_exists('ValidateMatch')) {
    }
 }
 
+if (!function_exists('ValidateVersion')) {
+   function ValidateVersion($Value) {
+      if (empty($Value))
+         return TRUE;
+
+      if (preg_match('`(?:\d+\.)*\d+\s*([a-z]*)\d*`i', $Value, $Matches)) {
+         // Get the version word out of the matches and validate it.
+         $Word = $Matches[1];
+         if (!in_array(trim($Word), array('', 'dev', 'alpha', 'a', 'beta', 'b', 'RC', 'rc', '#', 'pl', 'p')))
+         	return FALSE;
+         return TRUE;
+      }
+      return FALSE;
+   }
+}
+
+/**
+ * Validate phone number against North American Numbering Plan.
+ * @link http://blog.stevenlevithan.com/archives/validate-phone-number
+ */
+if (!function_exists('ValidatePhoneNA')) {
+   function ValidatePhoneNA($Value, $Field = '') {
+      if ($Value == '')
+         return true; // Do not require by default.
+      $Valid = ValidateRegex($Value, '/^(?:\+?1[-. ]?)?\(?([0-9]{3})\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})$/');
+      return ($Valid) ? $Valid : T('ValidatePhone', 'Phone number is invalid.');
+   }
+}
+
+/**
+ * Loose validation for international phone number (but must start with a plus sign).
+ */
+if (!function_exists('ValidatePhoneInt')) {
+   function ValidatePhoneInt($Value, $Field = '') {
+      if ($Value == '')
+         return true; // Do not require by default.
+      $Valid = ValidateRegex($Value, '/^\+(?:[0-9] ?){6,14}[0-9]$/');
+      return ($Valid) ? $Valid : T('ValidatePhone', 'Phone number is invalid.');
+   }
+}
+
+/**
+ * Validate US zip code (5-digit or 9-digit with hyphen).
+ */
+if (!function_exists('ValidateZipCode')) {
+   function ValidateZipCode($Value, $Field = '') {
+      if ($Value == '')
+         return true; // Do not require by default.
+      $Valid = ValidateRegex($Value, '/^([0-9]{5})(-[0-9]{4})?$/');
+      return ($Valid) ? $Valid : T('ValidateZipCode', 'Zip code is invalid.');
+   }
+}

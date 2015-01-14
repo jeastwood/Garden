@@ -11,26 +11,24 @@ Contact Vanilla Forums Inc. at support [at] vanillaforums [dot] com
 /**
  * Renders a list of users who are taking part in a particular discussion.
  */
-class InThisDiscussionModule extends Module {
-   
+class InThisDiscussionModule extends Gdn_Module {
+
    protected $_UserData;
-   
-   public function __construct(&$Sender = '') {
+
+   public function __construct($Sender = '') {
       $this->_UserData = FALSE;
       parent::__construct($Sender);
    }
-   
+
    public function GetData($DiscussionID, $Limit = 50) {
       $SQL = Gdn::SQL();
       $this->_UserData = $SQL
-         ->Select('u.UserID, u.Name')
-         ->Select('p.Name', '', 'Photo')
+         ->Select('u.UserID, u.Name, u.Photo')
          ->Select('c.DateInserted', 'max', 'DateLastActive')
          ->From('User u')
-         ->Join('Photo p', 'u.PhotoID = p.PhotoID', 'left')
          ->Join('Comment c', 'u.UserID = c.InsertUserID')
          ->Where('c.DiscussionID', $DiscussionID)
-         ->GroupBy('u.UserID, u.Name, p.Name')
+         ->GroupBy('u.UserID, u.Name')
          ->OrderBy('u.Name', 'asc')
          ->Get();
    }
@@ -40,11 +38,14 @@ class InThisDiscussionModule extends Module {
    }
 
    public function ToString() {
+      if ($this->_UserData->NumRows() == 0)
+         return '';
+
       $String = '';
       ob_start();
       ?>
       <div class="Box">
-         <h4><?php echo Gdn::Translate('In this Discussion'); ?></h4>
+         <h4><?php echo T('In this Discussion'); ?></h4>
          <ul class="PanelInfo">
          <?php
          foreach ($this->_UserData->Result() as $User) {
@@ -54,7 +55,7 @@ class InThisDiscussionModule extends Module {
                   echo UserAnchor($User, 'UserLink');
                ?></strong>
                <?php
-                  echo Format::Date($User->DateLastActive);
+                  echo Gdn_Format::Date($User->DateLastActive);
                ?>
             </li>
             <?php

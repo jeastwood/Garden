@@ -24,12 +24,12 @@ class Gdn_Schema {
     *  Name, PrimaryKey, Type, AllowNull, Default, Length, Enum
     */
    protected $_Schema;
-   
+
    /**
     * The name of the table currently being examined.
     */
    public $CurrentTable;
-   
+
    /**
     * Class constructor. Defines the related database table name.
     *
@@ -40,7 +40,7 @@ class Gdn_Schema {
       if ($Table != '')
          $this->Fetch($Table, $Database);
    }
-   
+
    /**
     * Fetches the schema for the requested table. If it does not exist yet, it
     * will connect to the database and define it.
@@ -52,10 +52,10 @@ class Gdn_Schema {
    public function Fetch($Table = FALSE, $Database = NULL) {
       if ($Table !== FALSE)
          $this->CurrentTable = $Table;
-      
+
       if (!is_array($this->_Schema))
          $this->_Schema = array();
-         
+
       if (!array_key_exists($this->CurrentTable, $this->_Schema)) {
          if($Database !== NULL) {
             $SQL = $Database->SQL();
@@ -67,7 +67,18 @@ class Gdn_Schema {
       }
       return $this->_Schema[$this->CurrentTable];
    }
-   
+
+   /** Gets the array of fields/properties for the schema.
+    *
+    * @return array
+    */
+   public function Fields($Tablename = FALSE) {
+      if (!$Tablename)
+         $Tablename = $this->CurrentTable;
+
+      return $this->_Schema[$Tablename];
+   }
+
    /**
     * Returns a the entire field object.
     *
@@ -77,17 +88,17 @@ class Gdn_Schema {
    public function GetField($Field, $Table = '') {
       if ($Table != '')
          $this->CurrentTable = $Table;
-      
+
       if (!is_array($this->_Schema))
          $this->_Schema = array();
-         
-      $Field = FALSE;
+
+      $Result = FALSE;
       if ($this->FieldExists($this->CurrentTable, $Field) === TRUE)
-         $Field = $this->_Schema[$this->CurrentTable][$FieldName];
-         
-      return $Field;
+         $Result = $this->_Schema[$this->CurrentTable][$Field];
+
+      return $Result;
    }
-   
+
    /**
     * Returns the value of $Property or $Default if not found.
     *
@@ -100,17 +111,17 @@ class Gdn_Schema {
       $Return = $Default;
       if ($Table != '')
          $this->CurrentTable = $Table;
-         
+
       $Properties = array('Name', 'PrimaryKey', 'Type', 'AllowNull', 'Default', 'Length', 'Enum');
       if (in_array($Property, $Properties)) {
          $Field = $this->GetField($Field, $this->CurrentTable);
          if ($Field !== FALSE)
             $Return = $Field->$Property;
       }
-         
+
       return $Return;
    }
-   
+
    /**
     * Returns a boolean value indicating if the specified $Field exists in
     * $Table. Assumes that $this->Fetch() has been called for $Table.
@@ -127,7 +138,7 @@ class Gdn_Schema {
       else
          return FALSE;
    }
-   
+
    /**
     * Returns the name (or array of names) of the field(s) that represents the
     * primary key on $Table.
@@ -141,7 +152,12 @@ class Gdn_Schema {
          if ($Properties->PrimaryKey === TRUE)
             $PrimaryKeys[] = $FieldName;
       }
-      
-      return count($PrimaryKeys) == 1 ? $PrimaryKeys[0] : $PrimaryKeys;
+
+      if (count($PrimaryKeys) == 0)
+         return '';
+      elseif (count($PrimaryKeys) == 1)
+         return $PrimaryKeys[0];
+      else
+         return $PrimaryKeys;
    }
 }

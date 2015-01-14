@@ -119,7 +119,10 @@ class Gdn_Validation {
       $this->AddRule('Required', 'function:ValidateRequired');
       $this->AddRule('RequiredArray', 'function:ValidateRequiredArray');
       $this->AddRule('Email', 'function:ValidateEmail');
+      $this->AddRule('WebAddress', 'function:ValidateWebAddress');
       $this->AddRule('Username', 'function:ValidateUsername');
+      $this->AddRule('UrlString', 'function:ValidateUrlString');
+      $this->AddRule('UrlStringRelaxed', 'function:ValidateUrlStringRelaxed');
       $this->AddRule('Date', 'function:ValidateDate');
       $this->AddRule('Integer', 'function:ValidateInteger');
       $this->AddRule('Boolean', 'function:ValidateBoolean');
@@ -132,6 +135,10 @@ class Gdn_Validation {
       $this->AddRule('Captcha', 'function:ValidateCaptcha');
       $this->AddRule('Match', 'function:ValidateMatch');
       $this->AddRule('OldPassword', 'function:ValidateOldPassword');
+      $this->AddRule('Version', 'function:ValidateVersion');
+      $this->AddRule('PhoneNA', 'function:ValidatePhoneNA');
+      $this->AddRule('PhoneInt', 'function:ValidatePhoneInt');
+      $this->AddRule('ZipCode', 'function:ValidateZipCode');
    }
 
 
@@ -240,13 +247,38 @@ class Gdn_Validation {
    public function ApplyRule($FieldName, $RuleName, $CustomError = '') {
       // Make sure that $FieldName is in the validation fields collection
       $this->ValidationFields();
-      
+
       if (!array_key_exists($FieldName, $this->_ValidationFields))
          $this->_ValidationFields[$FieldName] = '';
-         
+
       $this->_ApplyRule($FieldName, $RuleName, $CustomError);
    }
-      
+
+   /**
+    * Apply an array of validation rules all at once.
+    * @param array $Fields
+    */
+   public function ApplyRules($Fields) {
+      foreach ($Fields as $Index => $Row) {
+         $Validation = GetValue('Validation', $Row);
+         if (!$Validation)
+            continue;
+
+         $FieldName = GetValue('Name', $Row, $Index);
+         if (is_string($Validation)) {
+            $this->ApplyRule($FieldName, $Validation);
+         } elseif (is_array($Validation)) {
+            foreach ($Validation as $Rule) {
+               if (is_array($Rule)) {
+                  $this->ApplyRule($FieldName, $Rule[0], $Rule[1]);
+               } else {
+                  $this->ApplyRule($FieldName, $Rule);
+               }
+            }
+         }
+      }
+   }
+
    protected function _ApplyRule($FieldName, $RuleName, $CustomError = '') {
       if (!is_array($this->_FieldRules))
          $this->_FieldRules = array();
@@ -301,7 +333,7 @@ class Gdn_Validation {
       foreach($this->_ValidationFields as $Field => $Val) {
          $this->AddValidationField($Field, $PostedFields);
       }
-      
+
       if ($Schema != NULL) {
          // 2. Any field that is required by the schema
          foreach($Schema as $Field => $Properties) {
@@ -326,7 +358,7 @@ class Gdn_Validation {
    public function ValidationFields() {
       if (!is_array($this->_ValidationFields))
          $this->_ValidationFields = array();
-         
+
       return $this->_ValidationFields;
    }
 
@@ -422,6 +454,56 @@ class Gdn_Validation {
       }
    }
 
+   /**
+    * Execute a single validation rule and return its result.
+    *
+    * @param mixed $Value The value to validate.
+    * @param string $FieldName The name of the field to put into the error result.
+    * @param string|array $Rule The rule to validate which can be one of the following.
+    *  - string: The name of a function used to validate the value.
+    *  - 'regex:<regex>': The regular expression used to validate the value.
+    *  - array: An array with the following keys:
+    *    - Name: The name of the function used to validate.
+    *    - Args: An argument to pass to the function after the value.
+    * @param string $CustomError A custom error message.
+    * @return bool|string One of the following
+    *  - TRUE: The value passed validation.
+    *  - string: The error message associated with the error.
+    */
+   public static function ValidateRule($Value, $FieldName, $Rule, $CustomError = FALSE) {
+      // Figure out the type of rule.
+      if (is_string($Rule)) {
+         if (StringBeginsWith($Rule, 'regex:', TRUE)) {
+            $RuleName = 'regex';
+            $Args = substr($Rule, 6);
+         } elseif (StringBeginsWith($Rule, 'function:', TRUE)) {
+            $RuleName = substr($Rule, 9);
+         } else {
+            $RuleName = $Rule;
+         }
+      } elseif (is_array($Rule)) {
+         $RuleName = GetValue('Name', $Rule);
+         $Args = GetValue('Args', $Rule);
+      }
+
+      if (!isset($Args))
+         $Args = NULL;
+
+      if (function_exists($RuleName)) {
+         $Result = $RuleName($Value, $Args);
+         if ($Result === TRUE)
+            return TRUE;
+         elseif ($CustomError)
+            return $CustomError;
+         elseif (is_string($Result))
+            return $Result;
+         else
+            return sprintf(T($RuleName), T($FieldName));
+      } else {
+         return sprintf('Validation does not exist: %s.', $RuleName);
+      }
+   }
+
 
    /**
     * Examines the posted fields, defines $this->_ValidationFields, and
@@ -431,7 +513,7 @@ class Gdn_Validation {
     * @param boolean $Insert A boolean value indicating if the posted fields are to be inserted or
     *  updated. If being inserted, the schema's required field rules will be
     *  enforced.
-    * @return unknown
+    * @return boolean Whether or not the validation was successful.
     */
    public function Validate($PostedFields, $Insert = FALSE) {
       $this->DefineValidationFields($PostedFields, $this->_Schema, $Insert);
@@ -451,6 +533,7 @@ class Gdn_Validation {
          // If this field has rules to be enforced...
          if (array_key_exists($FieldName, $this->_FieldRules) && is_array($this->_FieldRules[$FieldName])) {
             // Enforce them...
+            $this->_FieldRules[$FieldName] = array_values($this->_FieldRules[$FieldName]);
             $RuleCount = count($this->_FieldRules[$FieldName]);
             for($i = 0; $i < $RuleCount; ++$i) {
                $RuleName = $this->_FieldRules[$FieldName][$i];
@@ -464,9 +547,10 @@ class Gdn_Validation {
 
                      // Call the function. Core-defined validation functions can
                      // be found in ./functions.validation.php
-                     $FieldInfo = NULL;
+                     $FieldInfo = array('Name' => $FieldName);
                      if (is_array($this->_Schema) && array_key_exists($FieldName, $this->_Schema))
-                        $FieldInfo = $this->_Schema[$FieldName];
+                        $FieldInfo = array_merge($FieldInfo, (array)$this->_Schema[$FieldName]);
+                     $FieldInfo = (object)$FieldInfo;
 
                      $ValidationResult = $Function($FieldValue, $FieldInfo, $PostedFields);
                      if ($ValidationResult !== TRUE) {
@@ -496,22 +580,27 @@ class Gdn_Validation {
       return count($this->_ValidationResults) == 0 ? TRUE : FALSE;
    }
 
-
    /**
-    * @param unknown_type $FieldName
-    * @param unknown_type $ErrorCode
-    * @todo add doc
+    * Add a validation result (error) to the validation.
+    *
+    * @param string $FieldName The name of the form field that has the error.
+    * @param string $ErrorCode The translation code of the error.
+    *    Codes thst begin with an '@' symbol are treated as literals and not translated.
     */
-   public function AddValidationResult($FieldName, $ErrorCode) {
+   public function AddValidationResult($FieldName, $ErrorCode = '') {
       if (!is_array($this->_ValidationResults))
          $this->_ValidationResults = array();
 
-      if (!array_key_exists($FieldName, $this->_ValidationResults))
-         $this->_ValidationResults[$FieldName] = array();
+      if(is_array($FieldName)) {
+         $ValidationResults = $FieldName;
+         $this->_ValidationResults = array_merge($this->_ValidationResults, $ValidationResults);
+      } else {
+         if (!array_key_exists($FieldName, $this->_ValidationResults))
+            $this->_ValidationResults[$FieldName] = array();
 
-      $this->_ValidationResults[$FieldName][] = $ErrorCode;
+         $this->_ValidationResults[$FieldName][] = $ErrorCode;
+      }
    }
-
 
    /**
     * Returns the $this->_ValidationResults array. You must use this method
@@ -519,10 +608,26 @@ class Gdn_Validation {
     *
     * @return array
     */
-   public function Results() {
-      if (!is_array($this->_ValidationResults))
+   public function Results($Reset = FALSE) {
+      if (!is_array($this->_ValidationResults) || $Reset)
          $this->_ValidationResults = array();
 
       return $this->_ValidationResults;
+   }
+
+   public function ResultsText() {
+      $Errors = array();
+      foreach ($this->Results() as $Name => $Value) {
+         if (is_array($Value)) {
+            foreach ($Value as $Code) {
+               $Errors[] = trim(sprintf(T($Code), T($Name)), '.');
+            }
+         } else {
+            $Errors[] = trim(sprintf(T($Value), T($Name)), '.');
+         }
+      }
+
+      $Result = implode('. ', $Errors);
+      return $Result;
    }
 }

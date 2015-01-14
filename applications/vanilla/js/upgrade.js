@@ -13,10 +13,12 @@ jQuery(document).ready(function($) {
          dataType: 'json',
          error: function(XMLHttpRequest, textStatus, errorThrown) {
             // Remove any old popups
-            $('.Popup').remove();
+            $('div.Popup').remove();
             $.popup({}, textStatus);
          },
          success: function(json) {
+            json = $.postParseJson(json);
+
             // Remove any old errors from the form
             if (json.FormSaved == false) {
                $('#Content').html(json.Data);
@@ -27,7 +29,7 @@ jQuery(document).ready(function($) {
       });
       return false;
    });
-   
+
    function CarryOn(json) {
       $('#Content').html(json.Data);
       if (json.NextUrl != null && json.NextUrl != 'Finished')
@@ -37,10 +39,12 @@ jQuery(document).ready(function($) {
             dataType: 'json',
             error: function(XMLHttpRequest, textStatus, errorThrown) {
                // Remove any old popups
-               $('.Popup').remove();
+               $('div.Popup').remove();
                $.popup({}, textStatus);
             },
             success: function(json) {
+               json = $.postParseJson(json);
+
                CarryOn(json);
             }
          });

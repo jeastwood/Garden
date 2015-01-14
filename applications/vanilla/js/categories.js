@@ -1,20 +1,32 @@
 jQuery(document).ready(function($) {
-   // Categories->Add() && Categories->Edit()
-   // Hide/reveal the permissions grids when the AllowDiscussions checkbox is un/checked.
-   $('[name=Category/AllowDiscussions]').click(function() {
-      if ($(this).attr('checked'))
-         $('#Permissions').slideDown('fast');
-      else
-         $('#Permissions').slideUp('fast');
+   // Map plain text category to url code
+   $("#Form_Name").keyup(function(event) {
+      if ($('#Form_CodeIsDefined').val() == '0') {
+         $('#UrlCode').show();
+         var val = $(this).val().replace(/[ \/\\&.?;,<>'"]+/g, '-')
+         val = val.replace(/\-+/g, '-').toLowerCase();
+         $("#Form_UrlCode").val(val);
+         $("#UrlCode span").text(val);
+      }
    });
-   // Categories->Add() && Categories->Edit()
-   // Hide onload if unchecked   
-   if (!$('[name=Category/AllowDiscussions]').attr('checked'))
-      $('#Permissions').hide();
-   
+   // Make sure not to override any values set by the user.
+   $('#UrlCode span').text($('#UrlCode input').val());
+   $("#Form_UrlCode").focus(function() {
+      $('#Form_CodeIsDefined').val('1')
+   });
+   $('#UrlCode input, #UrlCode a.Save').hide();
+
+   // Reveal input when "change" button is clicked
+   $('#UrlCode a, #UrlCode span').click(function() {
+      $('#UrlCode').find('input,span,a').toggle();
+      $('#UrlCode span').text($('#UrlCode input').val());
+      $('#UrlCode input').focus();
+      return false;
+   });
+
    // Categories->Delete()
    // Hide/reveal the delete options when the DeleteDiscussions checkbox is un/checked.
-   $('[name=Form/DeleteDiscussions]').click(function() {
+   $('[name$=DeleteDiscussions]').click(function() {
       if ($(this).attr('checked')) {
          $('#ReplacementCategory,#ReplacementWarning').slideDown('fast');
          $('#DeleteDiscussions').slideUp('fast');
@@ -24,8 +36,8 @@ jQuery(document).ready(function($) {
       }
    });
    // Categories->Delete()
-   // Hide onload if unchecked   
-   if (!$('[name=Form/DeleteDiscussions]').attr('checked')) {
+   // Hide onload if unchecked
+   if (!$('[name$=DeleteDiscussions]').attr('checked')) {
       $('#ReplacementCategory,#ReplacementWarning').hide();
       $('#DeleteDiscussions').show();
    } else {
@@ -33,27 +45,44 @@ jQuery(document).ready(function($) {
       $('#DeleteDiscussions').hide();
    }
 
-   // Categories->Manage()
-   // Make category table sortable
-   if ($.tableDnD) {
-      saveAndReload = function(table, row) {
-         var webRoot = definition('WebRoot', '');
-         var transientKey = definition('TransientKey');
-         var tableId = $($.tableDnD.currentTable).attr('id');
-         var data = $.tableDnD.serialize() + '&TableID=' + tableId + '&DeliveryType=VIEW&Form/TransientKey=' + transientKey;
-         $.post(combinePaths(webRoot, '/vanilla/settings/sortcategories/'), data, function(response) {
-            if (response == 'TRUE') {
-               // Reload the page content...
-               $.get(webRoot + '/vanilla/settings/managecategories/?DeliveryType=VIEW', function(data){
-                  $('#Content form').remove();
-                  $('#Content').append(data);
-                  $('table.Sortable tbody tr td').effect("highlight", {}, 1000);
-                  $("table.Sortable").tableDnD({onDrop: saveAndReload});
-               });
-            }
-         });
+   // Set custom categories display.
+   var displayCategoryPermissions = function() {
+      var checked = $('#Form_CustomPermissions').attr('checked');
+      if (checked) {
+         $('.CategoryPermissions').show();
+      } else {
+         $('.CategoryPermissions').hide();
       }
-      $("table.Sortable").tableDnD({onDrop: saveAndReload});
-   }
+   };
+   $('#Form_CustomPermissions').click(displayCategoryPermissions);
+   displayCategoryPermissions();
 
+   if ($.ui && $.ui.nestedSortable)
+      $('ol.Sortable').nestedSortable({
+         disableNesting: 'NoNesting',
+         errorClass: 'SortableError',
+         forcePlaceholderSize: true,
+         handle: 'div',
+         items: 'li',
+         opacity: .6,
+         placeholder: 'Placeholder',
+         tabSize: 25,
+         tolerance: 'pointer',
+         toleranceElement: '> div',
+         update: function() {
+            $.post(
+               gdn.url('/vanilla/settings/sortcategories/'),
+               {
+                  'TreeArray': $('ol.Sortable').nestedSortable('toArray', {startDepthCount: 0}),
+                  'DeliveryType': 'VIEW',
+                  'TransientKey': gdn.definition('TransientKey')
+               },
+               function(response) {
+                  if (response != 'TRUE') {
+                     alert("Oops - Didn't save order properly");
+                  }
+               }
+            );
+         }
+      });
 });
